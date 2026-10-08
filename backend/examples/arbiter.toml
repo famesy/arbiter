@@ -1,0 +1,104 @@
+# Example arbiter config. Copy it to the state dir as config.toml, or point
+# ARBITER_CONFIG at it:
+#   Linux    ~/.local/state/arbiter/config.toml
+#   Windows  %LOCALAPPDATA%\arbiter\config.toml
+# `arbiter discover` prints a [[board]] block for each probe it finds.
+
+[daemon]
+host = "127.0.0.1"
+port = 7777
+human_name = "Fame"
+# NCS tools are not on PATH outside nRF Connect's terminal. Point at the toolchain
+# bundle's environment.json so west and nrfutil resolve from it.
+# toolchain_env = 'C:\ncs\toolchains\<id>\environment.json'
+# Folders added to the import path for `driver = "module:Class"` plugins.
+# plugin_paths = ["~/arbiter-plugins"]
+
+# Lease and queue timing (seconds). These are the defaults.
+[timing]
+lease_ttl_s = 900
+heartbeat_timeout_s = 25
+grace_s = 30
+ticket_ttl_s = 90
+claim_timeout_s = 120
+max_wait_s = 45
+
+# ------------------------------------------------------------------ nRF9161 DK
+[[board]]
+id = "nrf9161dk-1"
+driver = "nrf"
+platform = "nrf9161dk/nrf9161/ns"
+probe_serial = "1050978819"      # leading zeros are ignored, USB reports 001050978819
+device = "nRF9161_xxCA"          # J-Link device name, used for RTT
+tags = ["lte"]
+console = "auto"                 # auto reads the build's .config: rtt | uart
+allow_agent_erase = false        # erase and recover always ask the human first
+
+# VCOM ports are matched by nrfutil's vcom index, so COM numbers can change.
+[[board.port]]
+role = "app"                     # VCOM0: the application console (uart:app)
+vcom = 0
+
+[[board.port]]
+role = "aux"                     # VCOM1: TF-M secure output, read only (uart:tfm)
+name = "tfm"
+vcom = 1
+
+# Optional: a Nordic PPK2 as the board's supply and current meter.
+# [board.power]
+# kind = "ppk2"
+# serial = "C4A1B2C3D4E5"
+# default_mv = 3700
+# mv_min = 3000
+# mv_max = 5000
+
+# Optional: replace any action with your own command.
+# [board.commands]
+# reset = "nrfutil device reset --serial-number {serial} --reset-kind RESET_PIN"
+
+# --------------------------------------------------------------- native_sim
+# Linux only (on Windows, run arbiterd inside WSL). "flash" starts zephyr.exe.
+[[board]]
+id = "native-1"
+driver = "native_sim"
+platform = "native_sim"
+
+[board.options]
+uart = "stdio"                   # stdio | pty
+autostart = false
+
+# ---------------------------------------------------------- simulated board
+# Needs no hardware. Useful to try the queue, the dashboard and agent setup.
+[[board]]
+id = "sim-1"
+driver = "sim"
+platform = "nrf9161dk/nrf9161/ns"
+
+[board.power]
+kind = "sim"
+
+# ----------------------------------------------- a board made of commands
+# Every action is your own command. Templates are argv lists or strings, never run
+# through a shell. Empty placeholders are dropped; write literal braces as {{ }}.
+# [[board]]
+# id = "custom-1"
+# driver = "command"
+# platform = "my_board"
+#
+# [[board.port]]
+# role = "app"
+# port = "/dev/ttyACM0"
+#
+# [board.commands]
+# flash = ["my-flash-tool", "--sn", "{serial}", "{hex}"]
+# reset = "my-flash-tool --sn {serial} --reset"
+# present = "my-flash-tool --sn {serial} --ping"
+#
+# A supply you drive with your own script. `measure` prints JSON on its last line.
+# [board.power]
+# kind = "command"
+# [board.power.commands]
+# on = "python psu.py on"
+# off = "python psu.py off"
+# set_voltage = "python psu.py volts {mv}"
+# measure = "python psu.py measure --ms {duration_ms}"
