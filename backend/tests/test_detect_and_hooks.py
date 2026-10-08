@@ -5,7 +5,8 @@ import struct
 from pathlib import Path
 
 import pytest
-from arbiter.console.detect import detect_from_build, detect_from_elf, elf_symbol
+from arbiter.console.detect import detect_from_build, detect_from_elf
+from arbiter.elf import elf_symbol
 from arbiter.hooks import check_command
 from arbiter.plugins import render
 

@@ -199,6 +199,8 @@ async def test_mcp_server_end_to_end(server, build_dir):
         while f.get("status") == "running":
             f = await call("run_status", op_id=f["op_id"])
         assert f["status"] == "done", f
+        sh = await call("shell_commands")  # board omitted: the one this session holds
+        assert sh["available"] and "kernel" in [c["name"] for c in sh["commands"]]
         await call("serial_write", data="kernel uptime")
         m = await call("serial_expect", regex=r"Uptime: \d+ ms", timeout_s=5)
         assert m["matched"]

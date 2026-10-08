@@ -27,6 +27,7 @@ from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
 from .store import EventBus, Store
+from .zephyr_shell import ShellCommands
 
 log = logging.getLogger("arbiter")
 _R = TypeVar("_R")
@@ -121,6 +122,7 @@ class BoardRuntime:
     detached_for_pause: list[str] = field(default_factory=list)
     supported: bool = True
     support_note: str = ""
+    shell: dict[str, Any] | None = None  # shell commands of the last flashed image
 
 
 class Arbiter:
@@ -168,6 +170,8 @@ class Arbiter:
         ok, why = driver.platform_support()
         power = make_power_device(bc.power, driver, self.cfg.plugin_paths)
         rt = BoardRuntime(bc, driver, hub, power, supported=ok, support_note=why)
+        if self.store:
+            rt.shell = self.store.get(f"shell:{bc.id}")
         self.boards[bc.id] = rt
         slot = self.sched.add_board(bc.id, bc.platform, bc.tags)
         if not ok:
@@ -620,10 +624,47 @@ class Arbiter:
                     )
             if rt.driver.console_map:
                 res.setdefault("console", rt.driver.console_map.to_dict())
+            if res.get("ok"):
+                res["shell_commands"] = await self._read_shell(rt, Path(build_dir))
             rt.hub.annotate(f"[arbiter] flash {'ok' if res.get('ok') else 'FAILED'}")
             return res
 
         return await self._start_op(lease, rt, "flash", do, wait_s)
+
+    async def _read_shell(self, rt: BoardRuntime, build_dir: Path) -> int | None:
+        """Record the flashed image's shell commands for console completion. Never fails
+        the flash: an image without a shell, or one that can't be read, records why."""
+        try:
+            info = await asyncio.to_thread(rt.driver.shell_commands, build_dir)
+        except Exception as e:  # a plugin driver's own extraction
+            log.warning("shell command extraction failed on %s: %s", rt.cfg.id, e)
+            info = ShellCommands(False, f"cannot read shell commands: {e}")
+        rt.shell = {
+            "board": rt.cfg.id,
+            "build_dir": str(build_dir),
+            "updated_at": self.clock(),
+            "count": info.count(),
+            **info.to_dict(),
+        }
+        if self.store:
+            self.store.put(f"shell:{rt.cfg.id}", rt.shell)
+        self.bus.publish(
+            "board.shell",
+            {"board": rt.cfg.id, "available": info.available, "count": rt.shell["count"]},
+        )
+        return rt.shell["count"] if info.available else None
+
+    def shell_commands(self, board_id: str) -> dict[str, Any]:
+        rt = self.rt(board_id)
+        if rt.shell is None:
+            return {
+                "board": board_id,
+                "available": False,
+                "reason": "nothing has been flashed through arbiter yet",
+                "count": 0,
+                "commands": [],
+            }
+        return rt.shell
 
     def _gate(
         self, lease: sch.Lease, rt: BoardRuntime, action: str, args: dict[str, Any]
@@ -1200,6 +1241,7 @@ class Arbiter:
             rt = self.boards[b["id"]]
             b.update(rt.driver.describe())
             b["supported"], b["support_note"] = rt.supported, rt.support_note or None
+            b["shell_commands"] = rt.shell["count"] if rt.shell and rt.shell["available"] else None
             b["power"] = rt.power.describe() if rt.power else None
             b["op"] = rt.op.public() if rt.op and rt.op.ended is None else None
             b["console_channels"] = {"primary": rt.hub.primary, "ends": rt.hub.ends()}

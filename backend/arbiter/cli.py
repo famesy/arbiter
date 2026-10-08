@@ -420,6 +420,35 @@ def cmd_plugins(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_shell(args: argparse.Namespace) -> int:
+    """Shell commands of a board's flashed image, or of a build dir (read locally)."""
+    if args.build:
+        from .zephyr_shell import from_build
+
+        info = from_build(Path(args.build)).to_dict()
+    else:
+        if not args.board:
+            print("give a board, or --build DIR", file=sys.stderr)
+            return 2
+        info = Client().get(f"/api/boards/{args.board}/shell")
+    if args.json:
+        _print(info, True)
+        return 0
+    if not info.get("available"):
+        print(f"no shell commands: {info.get('reason')}")
+        return 1
+
+    def show(cmds: list[dict[str, Any]], depth: int) -> None:
+        for c in cmds:
+            name = "  " * depth + c["name"] + (" <dynamic>" if c.get("dynamic") else "")
+            first_line = (c.get("help") or "").strip().splitlines()[:1]
+            print(f"{name:<28} {first_line[0] if first_line else ''}".rstrip())
+            show(c.get("subcommands") or [], depth + 1)
+
+    show(info.get("commands") or [], 0)
+    return 0
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import main
 
@@ -450,6 +479,9 @@ def build_parser() -> argparse.ArgumentParser:
     add("status", cmd_status, "boards, queue and approvals")
     add("discover", cmd_discover, "list probes and print config snippets")
     add("plugins", cmd_plugins, "list available drivers and power devices")
+    sp = add("shell-cmds", cmd_shell, "shell commands of a board's flashed image")
+    sp.add_argument("board", nargs="?")
+    sp.add_argument("--build", help="read them from this build dir instead (no daemon needed)")
     sp = add("acquire", cmd_acquire, "ask for a board (exit 75 while queued)")
     sp.add_argument("selector")
     sp.add_argument("--reason", default="")
