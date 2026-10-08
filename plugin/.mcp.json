@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "arbiter": {
+      "command": "arbiter",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "ARBITER_AGENT_KIND": "claude"
+      }
+    }
+  }
+}

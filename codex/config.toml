@@ -1,0 +1,10 @@
+# arbiter for Codex. Add this to ~/.codex/config.toml, or to a trusted
+# project's .codex/config.toml. Needs `arbiter` on PATH (pip install -e backend).
+
+[mcp_servers.arbiter]
+command = "arbiter"
+args = ["mcp"]
+env = { ARBITER_AGENT_KIND = "codex" }
+startup_timeout_sec = 20
+# Tool calls wait at most 45 s on the daemon side (wait_for_board, serial_expect).
+tool_timeout_sec = 60

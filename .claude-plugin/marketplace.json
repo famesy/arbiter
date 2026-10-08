@@ -1,0 +1,16 @@
+{
+  "name": "arbiter",
+  "owner": {
+    "name": "famesy"
+  },
+  "metadata": {
+    "description": "Share physical Zephyr dev boards between AI coding agents and a human."
+  },
+  "plugins": [
+    {
+      "name": "arbiter",
+      "source": "./plugin",
+      "description": "Queue for shared dev boards, then flash, read the console and run hardware tests through arbiter."
+    }
+  ]
+}
