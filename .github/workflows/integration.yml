@@ -1,0 +1,48 @@
+# Integration tests run only when asked:
+#   - Actions tab > Integration > Run workflow, or
+#   - add the "run-integration" label to a PR (re-runs on each push while the label stays).
+# "simulated" runs on a GitHub-hosted runner (sim / native_sim drivers).
+# "hardware" runs on a self-hosted runner labelled `arbiter-hw` that has the boards attached.
+name: Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to run
+        type: choice
+        options: [simulated, hardware]
+        default: simulated
+  pull_request:
+    types: [labeled, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run at a time per target, so two runs never fight over a physical board.
+  group: integration-${{ inputs.target || 'simulated' }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-integration')
+    name: Integration (${{ inputs.target || 'simulated' }})
+    runs-on: ${{ inputs.target == 'hardware' && fromJSON('["self-hosted", "arbiter-hw"]') || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e ./backend
+      - name: Integration tests
+        env:
+          ARBITER_TEST_TARGET: ${{ inputs.target || 'simulated' }}
+        run: pytest backend/tests -m integration -v
