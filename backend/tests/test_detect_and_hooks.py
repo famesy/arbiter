@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 from pathlib import Path
 
@@ -129,3 +130,28 @@ def test_hooks_allow_normal_work(cmd):
 def test_render_drops_empty_args_and_keeps_literal_braces():
     argv = render("tool --sn {serial} {erase} --json {{x}}", {"serial": "123", "erase": ""})
     assert argv == ["tool", "--sn", "123", "--json", "{x}"]
+
+
+def test_split_command_on_windows(monkeypatch):
+    from arbiter import plugins
+
+    monkeypatch.setattr(plugins, "IS_WINDOWS", True)
+    cmd = r'"C:\Program Files\tool.exe" -c "import sys; print(1)" C:\fw\build {serial}'
+    assert plugins.render(cmd, {"serial": "42"}) == [
+        r"C:\Program Files\tool.exe",
+        "-c",
+        "import sys; print(1)",
+        r"C:\fw\build",
+        "42",
+    ]
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_pre_tool_use_denies_on_each_shell_tool(tool, capsys, tmp_path, monkeypatch):
+    from arbiter.hooks import pre_tool_use
+
+    monkeypatch.setenv("ARBITER_HOME", str(tmp_path))  # no daemon: no queue hint
+
+    pre_tool_use({"tool_name": tool, "tool_input": {"command": "nrfjprog --program fw.hex"}})
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"

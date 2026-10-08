@@ -43,6 +43,48 @@ from ..errors import ArbiterError
 from ..procs import kill_tree
 from .base import BoardDriver, LineFn, is_linux
 
+
+def unsupported_note() -> str:
+    if sys.platform == "win32":
+        note = "native_sim runs only on Linux; on Windows run arbiterd inside WSL"
+    else:
+        note = "native_sim runs only on Linux"
+    return note
+
+
+if sys.platform == "win32":
+
+    def _open_pty() -> tuple[int, int]:
+        raise ArbiterError("NOT_SUPPORTED", unsupported_note())
+
+    def _stop(pid: int) -> None:
+        raise ArbiterError("NOT_SUPPORTED", unsupported_note())
+
+    def _continue(pid: int) -> None:
+        raise ArbiterError("NOT_SUPPORTED", unsupported_note())
+
+else:
+    import pty
+    import termios
+    import tty
+
+    def _open_pty() -> tuple[int, int]:
+        """A raw, no-echo pty pair; the master end is non-blocking."""
+        master, slave = pty.openpty()
+        tty.setraw(slave)
+        attrs = termios.tcgetattr(slave)
+        attrs[3] &= ~termios.ECHO
+        termios.tcsetattr(slave, termios.TCSANOW, attrs)
+        os.set_blocking(master, False)
+        return master, slave
+
+    def _stop(pid: int) -> None:
+        os.kill(pid, signal.SIGSTOP)
+
+    def _continue(pid: int) -> None:
+        os.kill(pid, signal.SIGCONT)
+
+
 PTY_LINE = re.compile(rb"connected to pseudotty: (/dev/pts/\d+)")
 
 
@@ -69,9 +111,7 @@ class NativeSimDriver(BoardDriver):
     def platform_support() -> tuple[bool, str]:
         if is_linux():
             return True, ""
-        if sys.platform == "win32":
-            return False, "native_sim runs only on Linux; on Windows run arbiterd inside WSL"
-        return False, "native_sim runs only on Linux"
+        return False, unsupported_note()
 
     # ---------------------------------------------------------------- lifecycle
     async def start(self) -> None:
@@ -101,10 +141,6 @@ class NativeSimDriver(BoardDriver):
                 "nothing flashed yet",
                 hint="Call flash with a native_sim build dir first.",
             )
-        import pty
-        import termios
-        import tty
-
         argv = [str(self.image), *self.extra_args]
         if (
             self.uart_mode == "stdio"
@@ -112,11 +148,7 @@ class NativeSimDriver(BoardDriver):
             and "--uart_stdinout" not in argv
         ):
             argv.append("-uart_stdinout")
-        master, slave = pty.openpty()
-        tty.setraw(slave)
-        attrs = termios.tcgetattr(slave)
-        attrs[3] &= ~termios.ECHO
-        termios.tcsetattr(slave, termios.TCSANOW, attrs)
+        master, slave = _open_pty()
         try:
             self.proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -129,7 +161,6 @@ class NativeSimDriver(BoardDriver):
         finally:
             os.close(slave)
         self._master = master
-        os.set_blocking(master, False)
         self.hub.annotate(f"[arbiter] native_sim started (pid {self.proc.pid})")
         await self.hub.detach_all()
         if self.uart_mode == "stdio":
@@ -186,7 +217,7 @@ class NativeSimDriver(BoardDriver):
             self._watch = None
         if proc and proc.returncode is None:
             with contextlib.suppress(OSError):
-                os.kill(proc.pid, signal.SIGCONT)
+                _continue(proc.pid)
             await asyncio.to_thread(kill_tree, proc.pid, True, 1.0)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(proc.wait(), 3)
@@ -255,8 +286,8 @@ class NativeSimDriver(BoardDriver):
 
     async def reset(self, *, halt: bool, log_path: Path) -> dict[str, Any]:
         if halt:
-            if self.running:
-                os.kill(self.proc.pid, signal.SIGSTOP)  # type: ignore[union-attr]
+            if self.running and self.proc:
+                _stop(self.proc.pid)
             return {"ok": True, "halted": True}
         await self._launch()
         return {"ok": True, "halted": False}
