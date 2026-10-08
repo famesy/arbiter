@@ -19,7 +19,6 @@ Agents queue for a board, then flash, debug and run integration tests on it. A p
 | Path | What's there |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | The design doc |
-| [`prototype/`](prototype/) | A simulated dashboard; open `prototype/index.html` in a browser |
 | [`backend/`](backend/) | The `arbiterd` service (coming in its own pull request) |
 
 ## Status
