@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>arbiter</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="login" hidden>
+  <h1>arbiter</h1>
+  <p>This page needs the admin token. Open it with <code>arbiter dashboard</code>, which adds the token to the link,
+     or paste the <code>token</code> value from <code>admin.json</code> in the arbiter state folder.</p>
+  <form id="login-form">
+    <input id="login-token" type="password" placeholder="admin token" autocomplete="off">
+    <button type="submit">Open dashboard</button>
+  </form>
+  <p id="login-error" class="err" hidden></p>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <span class="brand">arbiter</span>
+    <span id="conn" class="muted">connecting</span>
+    <span id="summary" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="pause-all" title="Pause every agent that holds a board">Pause all agents</button>
+  </header>
+  <div id="alerts"></div>
+  <main>
+    <section>
+      <h2>Boards</h2>
+      <div id="boards"></div>
+      <div id="probes"></div>
+      <div class="panel">
+        <h2>Agents</h2>
+        <div id="sessions"></div>
+      </div>
+    </section>
+    <section id="detail"></section>
+  </main>
+  <div style="padding: 0 16px 24px">
+    <div class="panel">
+      <h2>Activity <label class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">
+        <input type="checkbox" id="feed-filter"> selected board only</label></h2>
+      <div id="feed"></div>
+    </div>
+  </div>
+</div>
+<div id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

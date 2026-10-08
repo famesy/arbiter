@@ -23,6 +23,9 @@ from .errors import ArbiterError
 from .plugins import available as available_plugins
 from .service import Arbiter
 
+# The bundled web dashboard (plain HTML/CSS/JS, no build step).
+DASHBOARD_DIR = Path(__file__).parent / "dashboard"
+
 Handler = Callable[..., Awaitable[Any]]
 Endpoint = Callable[[Request], Awaitable[Response]]
 Ctx = dict[str, Any]
@@ -470,7 +473,7 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     # ------------------------------------------------------------ dashboard
     async def index(req: Request) -> Response:
         if dashboard_dir and (dashboard_dir / "index.html").exists():
-            return HTMLResponse((dashboard_dir / "index.html").read_text())
+            return HTMLResponse((dashboard_dir / "index.html").read_text(encoding="utf-8"))
         return HTMLResponse(PLACEHOLDER)
 
     routes = [

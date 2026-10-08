@@ -21,6 +21,7 @@ See [docs/architecture.md](../docs/architecture.md) for the design.
 | Plugins | `arbiter.plugins` | Command overrides, command-only boards, entry-point plugins |
 | Agent API | `arbiter.mcp_server` | stdio MCP server agents launch (`arbiter mcp`) |
 | Human API | `arbiter.api` | HTTP and WebSocket API for the dashboard |
+| Dashboard | `arbiter/dashboard/` | Web page the daemon serves at `/` (plain HTML/JS, no build step) |
 | CLI | `arbiter.cli` | Agent and human commands, hooks, twister console bridge |
 
 Runs on Linux and Windows (Python 3.11+). macOS should work but isn't tested.
@@ -43,6 +44,20 @@ everything without hardware. For real boards, copy
 On Windows with nRF Connect SDK, set `daemon.toolchain_env` to the toolchain bundle's
 `environment.json`, because `west` and `nrfutil` are not on PATH outside nRF Connect's
 own terminal.
+
+## Dashboard
+
+```sh
+arbiter dashboard                 # opens http://127.0.0.1:7777/?token=... in your browser
+```
+
+The daemon serves the dashboard itself, so it works offline. The link carries the admin
+token (from `admin.json` in the state dir); the page keeps it, so later visits to
+`http://127.0.0.1:7777/` work until the daemon restarts with a new token. It shows each
+board's status, holder, lease time, console source and last flash result, a live terminal
+with a tab per console channel, the queue, power, test runs and an activity feed. You can
+pause, take over, give back or revoke, reorder the queue and type into the console. Set
+`ARBITER_DASHBOARD_DIR` to serve a different copy while working on it.
 
 ## Connect an agent
 
