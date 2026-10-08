@@ -57,7 +57,10 @@ def kill_tree(pid: int, sig_first: bool = True, grace: float = 3.0) -> None:
         import psutil
     except ImportError:  # pragma: no cover
         with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGKILL if not IS_WINDOWS else signal.SIGTERM)
+            if sys.platform == "win32":
+                os.kill(pid, signal.SIGTERM)
+            else:
+                os.kill(pid, signal.SIGKILL)
         return
     try:
         parent = psutil.Process(pid)
@@ -92,8 +95,8 @@ async def run_proc(
 ) -> ProcResult:
     t0 = time.monotonic()
     kwargs: dict[str, Any] = {}
-    if IS_WINDOWS:
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     full_env = {**os.environ, **(env or {})}

@@ -17,6 +17,10 @@ from typing import Any
 from .client import Client, ensure_daemon
 from .errors import ArbiterError
 
+# Tools that run a shell command from tool_input["command"]: Claude Code (Bash, and
+# PowerShell on Windows) and Codex (shell, exec_command, local_shell).
+SHELL_TOOLS = {"Bash", "PowerShell", "shell", "exec_command", "local_shell"}
+
 DENY = [
     (
         r"\bwest\s+(flash|debug|debugserver|attach|rtt)\b",
@@ -90,7 +94,7 @@ def pre_tool_use(p: dict[str, Any]) -> None:
     tool = p.get("tool_name") or p.get("tool") or ""
     ti = p.get("tool_input") or {}
     cmd = ti.get("command") if isinstance(ti, dict) else None
-    if tool not in ("Bash", "shell", "exec_command", "local_shell") or not isinstance(cmd, str):
+    if tool not in SHELL_TOOLS or not isinstance(cmd, str):
         return
     why = check_command(cmd)
     if not why:

@@ -189,9 +189,18 @@ def make_power_device(
 
 
 # ------------------------------------------------------------------ templates
+def split_command(template: str) -> list[str]:
+    """Split a command string into argv. On Windows, backslashes in paths stay as they are
+    and double quotes only group words (they are removed, as the C runtime does)."""
+    if not IS_WINDOWS:
+        return shlex.split(template)
+    parts = shlex.split(template, posix=False)
+    return [p[1:-1] if len(p) >= 2 and p[0] == p[-1] == '"' else p for p in parts]
+
+
 def render(template: Any, ctx: dict[str, Any]) -> list[str]:
     if isinstance(template, str):
-        parts = shlex.split(template, posix=not IS_WINDOWS)
+        parts = split_command(template)
     elif isinstance(template, list):
         parts = [str(p) for p in template]
     else:

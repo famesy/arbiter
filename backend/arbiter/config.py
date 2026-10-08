@@ -27,10 +27,11 @@ def state_dir() -> Path:
         return Path(env)
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return base / "arbiter"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "arbiter"
-    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "arbiter"
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    return base / "arbiter"
 
 
 @dataclass
