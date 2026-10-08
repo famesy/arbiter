@@ -883,7 +883,7 @@ class Arbiter:
         timeout_s = max(0.0, min(float(timeout_s), MAX_WAIT_S))
         names = rt.hub.resolve_many(channel)
         if since == "mark" or since is None:
-            start: dict[str, int] | int = self.marks.get(token, {})
+            start: dict[str, int] | int = dict(self.marks.get(token, {}))
         elif since == "now":
             start = rt.hub.ends()
         elif since == "start":

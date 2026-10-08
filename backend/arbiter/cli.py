@@ -441,6 +441,18 @@ def cmd_discover(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from .doctor import FAIL, run_checks
+
+    checks = run_checks(Path(args.config) if args.config else None)
+    if args.json:
+        _print([c.to_dict() for c in checks], True)
+    else:
+        for c in checks:
+            print(f"{c.status:<4}  {c.name}" + (f": {c.detail}" if c.detail else ""))
+    return 1 if any(c.status == FAIL for c in checks) else 0
+
+
 def cmd_plugins(args: argparse.Namespace) -> int:
     from .plugins import available
 
@@ -478,6 +490,8 @@ def build_parser() -> argparse.ArgumentParser:
     add("status", cmd_status, "boards, queue and approvals")
     add("discover", cmd_discover, "list probes and print config snippets")
     add("plugins", cmd_plugins, "list available drivers and power devices")
+    sp = add("doctor", cmd_doctor, "check the config, tools, probes and daemon")
+    sp.add_argument("--config")
     sp = add("acquire", cmd_acquire, "ask for a board (exit 75 while queued)")
     sp.add_argument("selector")
     sp.add_argument("--reason", default="")
