@@ -874,11 +874,14 @@ const term = {
     let text = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
     let cls = "";
     let tag = null;
-    // Lines sent to the board: "[human:Fame] > cmd" or "[agent:claude-1] > cmd".
-    const sent = /^\[(human|agent):([^\]]*)\] > /.exec(text);
+    // Lines sent to the board arrive as dim notes: "[you] > cmd" and "[claude-1a2b] > cmd"
+    // (older daemons: "[human:Fame] > cmd" and "[agent:claude-1] > cmd").
+    const old = /^\[(human|agent):([^\]]*)\] > /.exec(text);
+    const tagged = !old && (shown.dim || start.dim) ? /^\[([^\]\s]+)\] > /.exec(text) : null;
+    const sent = old || (tagged && [tagged[0], tagged[1] === "you" ? "human" : "agent", tagged[1]]);
     if (sent) {
       const me = state && state.daemon && state.daemon.human;
-      const mine = sent[1] === "human" && (!me || sent[2] === me);
+      const mine = sent[1] === "human" && (sent[2] === "you" || !me || sent[2] === me);
       tag = h("span", { class: `who ${mine ? "you" : "agent"}` }, mine ? "[you]" : `[${sent[2]}]`);
       text = text.slice(sent[0].length - 2); // keep "> cmd"
       cls = mine ? "h" : "a";
@@ -933,6 +936,10 @@ function describe(ev) {
     case "power.measured": return [`${d.board} measured avg ${ua(d.measurement.avg_ua)}, peak ${ua(d.measurement.peak_ua)}${d.measurement.valid === false ? " (not valid)" : ""}`, d.measurement.valid === false ? "warn" : ""];
     case "approval.requested": return [`${d.who ? who(d.who) : sess(d.approval.session)} asks to ${d.approval.action.replace(/_/g, " ")} ${d.approval.board}`, "warn"];
     case "approval.changed": return [`${d.approval.action.replace(/_/g, " ")} on ${d.approval.board}: ${d.approval.state}${d.approval.decided_by ? ` by ${who(d.approval.decided_by)}` : ""}`];
+    case "console.write": {
+      const who_ = d.sender && d.sender.kind === "human" ? (d.sender.name || "You") : (d.sender && (d.sender.name || d.sender.tag)) || "an agent";
+      return [`${who_} sent “${String(d.data || "").trim()}” to ${d.board}${d.channel ? ` (${d.channel})` : ""}`];
+    }
     case "notify": return [String(d.text).replace(/^(agent|human):/, ""), "warn"];
     default: return [`${d.kind} ${d.board || ""}`];
   }
