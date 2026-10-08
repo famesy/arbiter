@@ -17,7 +17,7 @@ def test_dashboard_files_are_served(tmp_path: Path):
         page = client.get("/")
         assert page.status_code == 200
         assert "/static/app.js" in page.text
-        for name, kind in (("app.js", "javascript"), ("app.css", "css")):
+        for name, kind in (("app.js", "javascript"), ("app.css", "css"), ("favicon.svg", "svg")):
             res = client.get(f"/static/{name}")
             assert res.status_code == 200
             assert kind in res.headers["content-type"]

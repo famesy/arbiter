@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>g { fill: #111; } @media (prefers-color-scheme: dark) { g { fill: #f1f1f1; } }</style>
+  <g>
+    <rect x="22" y="22" width="20" height="20" rx="4.5"/>
+    <circle cx="32" cy="11.5" r="6"/>
+    <circle cx="52.78" cy="20.00" r="4.8"/>
+    <circle cx="52.78" cy="44.00" r="4.0"/>
+    <circle cx="32.00" cy="56.00" r="3.3"/>
+    <circle cx="11.22" cy="44.00" r="2.7"/>
+    <circle cx="11.22" cy="20.00" r="2.2"/>
+  </g>
+</svg>

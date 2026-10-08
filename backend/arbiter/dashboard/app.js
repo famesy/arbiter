@@ -324,7 +324,10 @@ function boardCard(b) {
 }
 
 function renderProbes() {
-  const ps = state.unassigned_probes || [];
+  // Serials can differ only by leading zeros (USB reports 001050978819).
+  const norm = (x) => String(x || "").replace(/^0+/, "");
+  const known = new Set(state.boards.map((b) => norm(b.serial || b.probe_serial)).filter(Boolean));
+  const ps = (state.unassigned_probes || []).filter((p) => !known.has(norm(p.serial)));
   renderIf($("#probes"), JSON.stringify(ps), () => ps.length ? h("div", { class: "board", style: "cursor:default;margin-top:var(--s2)" },
     h("div", { class: "name" }, "New probe found"),
     ps.map((p) => h("div", { class: "sub mono" }, `${p.serial} ${p.kind || ""} ${p.board || ""}`)),
@@ -337,7 +340,15 @@ function renderSessions() {
   const waiting = {};
   for (const e of state.queue || []) waiting[e.session] = e.wants;
   // Hide agents that have gone quiet and hold nothing; they only add noise.
-  const ss = (state.sessions || []).filter((s) => !s.ended && (s.alive || holding[s.id] || waiting[s.id]));
+  // Show agents that hold or wait for a board, plus ones active recently. Idle sessions from
+  // before the daemon started, or silent for 2 minutes, are leftovers and only add noise.
+  const now = nowS();
+  const started = (state.daemon && state.daemon.started_at) || 0;
+  const ss = (state.sessions || []).filter((s) => {
+    if (s.ended) return false;
+    if (holding[s.id] || waiting[s.id]) return true;
+    return s.alive && s.last_heartbeat >= started && now - s.last_heartbeat < 120;
+  });
   fill($("#agents-count"), String(ss.length));
   renderIf($("#sessions"), JSON.stringify([ss.map((s) => [s.id, s.alive]), holding, waiting]), () => ss.length ? h("table", {},
     ss.map((s) => h("tr", {},
@@ -369,19 +380,29 @@ function renderDetail() {
     D.controls = h("div", { class: "controls btn-row" });
     D.tabs = h("div", { class: "tabs", role: "tablist" });
     D.term = h("pre", { id: "term", tabindex: "0" });
-    D.input = h("input", { placeholder: "Type a command, Enter to send", autocomplete: "off", spellcheck: "false" });
+    D.input = h("input", {
+      placeholder: "Type a command, Enter to send",
+      autocomplete: "off",
+      spellcheck: "false",
+      oninput: () => { shell.active = -1; shell.forced = false; shell.update(); },
+      onfocus: () => shell.update(),
+      onblur: () => { shell.opts = []; shell.forced = false; D.suggest.hidden = true; },
+      onkeydown: (ev) => shell.key(ev),
+    });
+    D.suggest = h("div", { class: "suggest", hidden: true, role: "listbox" });
+    D.help = h("div", { class: "hint mono" });
     D.send = h("button", { class: "primary" }, "Send");
     D.hint = h("div", { class: "hint" });
     D.queue = h("div", { class: "scroll-x" });
     D.power = h("div");
     D.tests = h("div", { class: "scroll-x" });
     D.queueCount = h("span", { class: "count" });
-    const form = h("form", { class: "term-input", onsubmit: (ev) => { ev.preventDefault(); sendLine(); } }, D.input, D.send);
+    const form = h("form", { class: "term-input", onsubmit: (ev) => { ev.preventDefault(); sendLine(); } }, D.suggest, D.input, D.send);
     fill(root,
       h("div", { class: "card" }, D.head, D.controls),
       h("div", { class: "card" },
         h("div", { class: "term-bar" }, h("h2", { style: "margin:0" }, "Terminal"), D.tabs),
-        D.term, form, D.hint),
+        D.term, form, D.help, D.hint),
       h("div", { class: "card" }, h("h2", {}, "Queue ", D.queueCount), D.queue),
       D.power,
       h("div", { class: "card" }, h("h2", {}, "Test runs"), D.tests));
@@ -401,6 +422,7 @@ function renderDetail() {
       left ? h("span", { class: "muted" }, ` · lease ${left}`) : "",
       b.lease.paused_by ? h("span", { class: "muted" }, ` · paused by ${who(b.lease.paused_by)}${b.lease.pause_reason ? `: ${b.lease.pause_reason}` : ""}`) : "",
       b.op && b.op.running ? h("span", { class: "muted" }, ` · ${b.op.kind} running for ${dur(b.op.elapsed_s)}`) : "") : null);
+  shell.load(b.id, `${b.shell_commands}|${(lastOp(b.id, "flash") || {}).id}`);
   renderIf(D.controls, `${b.id}|${b.state}|${b.lease && b.lease.state}|${!!b.op}`, () => controls(b));
   renderTabs(b);
   renderTermHint(b);
@@ -409,10 +431,45 @@ function renderDetail() {
   renderTests(b);
 }
 
+const BUSY = {
+  "Pause agent": "Pausing…",
+  "Take over": "Taking over…",
+  "Take board": "Taking…",
+  "Give back": "Giving back…",
+  "Resume agent": "Resuming…",
+  "Revoke lease": "Revoking…",
+  "Reset": "Resetting…",
+  "Erase & recover": "Recovering…",
+};
+const DONE = {
+  "Pause agent": (bid, r) => (r.draining ? `Pausing ${bid} after the ${r.draining} finishes` : `Paused the agent on ${bid}`),
+  "Take over": (bid) => `You have ${bid}. The agent waits at the front of the queue.`,
+  "Take board": (bid) => `You have ${bid}`,
+  "Give back": (bid) => `Gave ${bid} back`,
+  "Resume agent": (bid) => `The agent on ${bid} can continue`,
+  "Revoke lease": (bid) => `Ended the lease on ${bid}`,
+  "Reset": (bid) => `Reset ${bid}`,
+};
+
 function controls(b) {
   const bid = b.id;
   const post = (action, body, label) => act(label, () => api("POST", `/api/admin/boards/${encodeURIComponent(bid)}/${action}`, body || {}));
-  const btn = (label, fn, attrs) => h("button", { ...(attrs || {}), onclick: fn }, label);
+  // Board actions can take a few seconds (a flash finishing, a reset), so the button
+  // shows it is working and a toast confirms the result.
+  const btn = (label, fn, attrs) => h("button", {
+    ...(attrs || {}),
+    onclick: async (ev) => {
+      const el = ev.currentTarget;
+      const pending = fn();
+      if (!pending || typeof pending.then !== "function") return;
+      el.disabled = true;
+      el.textContent = BUSY[label] || `${label}…`;
+      el.setAttribute("aria-busy", "true");
+      const res = await pending;
+      if (res && DONE[label]) toast(DONE[label](bid, res));
+      if (el.isConnected) { el.disabled = false; el.textContent = label; el.removeAttribute("aria-busy"); }
+    },
+  }, label);
   const out = [];
   const ls = b.lease && b.lease.state;
   const holder = who(b.lease && b.lease.holder);
@@ -460,23 +517,150 @@ function renderTabs(b) {
 }
 
 function renderTermHint(b) {
+  // You can type while an agent holds the board: the line goes to the console, marked as
+  // yours, and the agent keeps its lease. Take over stays the separate, explicit action.
   const agentHolds = b.state === "LEASED";
-  D.input.disabled = agentHolds || b.state === "OFFLINE";
+  D.input.disabled = b.state === "OFFLINE";
   D.send.disabled = D.input.disabled;
-  D.input.placeholder = agentHolds ? "An agent holds this board" : "Type a command, Enter to send";
+  D.input.placeholder = agentHolds ? `Type alongside ${who(b.lease.holder)}, Enter to send` : "Type a command, Enter to send";
+  const where = term.channel === "all" ? "the primary console" : term.channel;
+  const tips = shell.board === b.id && shell.data && shell.data.available
+    ? ` Tab suggests the ${shell.data.count} shell commands in the flashed image; ↑ recalls earlier lines.` : "";
   fill(D.hint, agentHolds
-    ? `${who(b.lease.holder)} holds this board. Pause it or take over to type.`
-    : term.channel === "all" ? "Commands go to the primary console." : `Commands go to ${term.channel}.`);
+    ? `${who(b.lease.holder)} holds this board. Lines you send go to ${where}, marked as yours; the agent keeps the board.${tips}`
+    : `Commands go to ${where}.${tips}`);
 }
 
+// ------------------------------------------------------------------ shell commands
+// Commands come from the flashed image's ELF (GET /api/boards/{id}/shell), so the input
+// can suggest them even when the firmware has tab completion turned off.
+const shell = {
+  board: null,
+  data: null, // the endpoint's reply, or null while unknown / unsupported
+  stamp: null,
+  opts: [],
+  active: -1,
+  forced: false, // list top-level commands on an empty line (after Tab)
+  history: [],
+  histPos: -1,
+
+  async load(boardId, stamp) {
+    if (this.board === boardId && this.stamp === stamp) return;
+    if (this.board !== boardId) this.data = null;
+    this.board = boardId;
+    this.stamp = stamp;
+    try {
+      const d = await api("GET", `/api/boards/${encodeURIComponent(boardId)}/shell`);
+      if (this.board === boardId) this.data = d;
+    } catch (e) {
+      if (this.board === boardId) this.data = null; // 404 on daemons without the endpoint
+    }
+    this.update();
+  },
+
+  // Walk the typed words through the command tree.
+  resolve(text) {
+    const words = text.replace(/^\s+/, "").split(/\s+/);
+    const partial = words.pop();
+    let level = (this.data && this.data.available && this.data.commands) || [];
+    let node = null;
+    for (const w of words) {
+      if (node && node.dynamic) return { node, partial, dynamic: true };
+      const next = level.find((c) => c.name === w);
+      if (!next) return { node: null, partial, unknown: words.length > 0 };
+      node = next;
+      level = next.subcommands || [];
+    }
+    return { node, partial, level, dynamic: !!(node && node.dynamic) };
+  },
+
+  update() {
+    const box = D.suggest;
+    if (!box) return;
+    const text = D.input.value;
+    const focused = document.activeElement === D.input;
+    const r = this.data && this.data.available ? this.resolve(text) : null;
+    // An empty line lists nothing until Tab, so ↑ still recalls history.
+    this.opts = r && r.level && !r.dynamic && focused && !D.input.disabled && (text.trim() || this.forced)
+      ? r.level.filter((c) => c.name.startsWith(r.partial) && c.name !== r.partial)
+      : [];
+    if (!this.opts.length) this.forced = false;
+    if (this.active >= this.opts.length) this.active = this.opts.length - 1;
+    const exact = r && r.level ? r.level.find((c) => c.name === r.partial) : null;
+    const node = exact || (r && r.node);
+    fill(D.help, node && node.help ? h("span", {}, h("b", { class: "mono" }, node.name), `  ${node.help.split("\n")[0]}`) :
+      r && r.dynamic ? `${r.node.name} takes values only the running firmware knows, so type them freely.` : "");
+    box.hidden = !this.opts.length;
+    fill(box, this.opts.map((c, i) => h("div", {
+      class: `opt ${i === this.active ? "on" : ""}`,
+      onmousedown: (ev) => { ev.preventDefault(); this.accept(i); },
+    }, h("span", { class: "n" }, c.name, c.subcommands && c.subcommands.length ? " …" : ""), h("span", { class: "d" }, (c.help || "").split("\n")[0]))),
+    this.opts.length ? h("div", { class: "foot" }, "Tab or ↑↓ to pick · Enter to send · Esc to close") : null);
+    const on = box.querySelector(".opt.on");
+    if (on) on.scrollIntoView({ block: "nearest" });
+  },
+
+  accept(i) {
+    const c = this.opts[i < 0 ? 0 : i];
+    if (!c) return;
+    const text = D.input.value;
+    const cut = text.length - (this.resolve(text).partial || "").length;
+    D.input.value = `${text.slice(0, cut)}${c.name} `;
+    this.active = -1;
+    D.input.focus();
+    this.update();
+  },
+
+  key(ev) {
+    const open = this.opts.length > 0;
+    if (ev.key === "Tab" && !open && !D.input.value.trim() && this.data && this.data.available) {
+      ev.preventDefault();
+      this.forced = true;
+      this.update();
+      return;
+    }
+    if (ev.key === "Tab" && open) {
+      ev.preventDefault();
+      if (this.opts.length === 1 || this.active >= 0) this.accept(this.active);
+      else { this.active = 0; this.update(); }
+    } else if ((ev.key === "ArrowDown" || ev.key === "ArrowUp") && open) {
+      ev.preventDefault();
+      const n = this.opts.length;
+      this.active = ev.key === "ArrowDown" ? (this.active + 1) % n : (this.active - 1 + n) % n;
+      this.update();
+    } else if (ev.key === "Enter" && open && this.active >= 0) {
+      ev.preventDefault();
+      this.accept(this.active);
+    } else if (ev.key === "Escape" && open) {
+      ev.preventDefault();
+      this.opts = [];
+      D.suggest.hidden = true;
+    } else if ((ev.key === "ArrowUp" || ev.key === "ArrowDown") && this.history.length) {
+      // Command history, like a shell.
+      ev.preventDefault();
+      const n = this.history.length;
+      this.histPos = ev.key === "ArrowUp" ? Math.max(0, (this.histPos < 0 ? n : this.histPos) - 1) : this.histPos < 0 ? -1 : this.histPos + 1;
+      if (this.histPos >= n) this.histPos = -1;
+      D.input.value = this.histPos < 0 ? "" : this.history[this.histPos];
+    }
+  },
+
+  remember(line) {
+    if (line && this.history[this.history.length - 1] !== line) this.history.push(line);
+    if (this.history.length > 100) this.history.shift();
+    this.histPos = -1;
+  },
+};
+
 async function sendLine() {
-  const data = D.input.value;
+  const data = D.input.value.replace(/\s+$/, "");
   if (!data.trim() || !selected) return;
   const body = { data };
   if (term.channel !== "all") body.channel = term.channel;
   const ok = await act("Send", () => api("POST", `/api/admin/boards/${encodeURIComponent(selected)}/write`, body));
-  if (ok) D.input.value = "";
+  if (ok) { shell.remember(data.trim()); D.input.value = ""; }
   D.input.focus();
+  shell.update();
 }
 
 function renderQueue(b) {
@@ -609,6 +793,7 @@ const term = {
   partial: null, // element holding the current unfinished line
   pending: "",
   dim: false,
+  colour: "",
   lines: 0,
 
   open(board, channel) {
@@ -620,6 +805,7 @@ const term = {
     this.partial = null;
     this.pending = "";
     this.dim = false;
+    this.colour = "";
     this.lines = 0;
     const dec = new TextDecoder();
     const ws = new WebSocket(wsUrl(`/api/boards/${encodeURIComponent(board)}/console?channel=${encodeURIComponent(channel)}&scrollback=65536`));
@@ -665,24 +851,47 @@ const term = {
   },
 
   lineEl(raw, partial) {
-    // Keep only the ANSI state we show (dim = arbiter notes); drop colours and cursor codes.
+    // Track the ANSI state we show: dim (arbiter notes) and the firmware's own red and
+    // yellow. Other colours and cursor codes are dropped.
     let dim = this.dim;
-    const startDim = dim;
+    let colour = this.colour;
+    const start = { dim, colour };
+    let first = null;
     raw.replace(/\x1b\[([0-9;]*)m/g, (_, codes) => {
       for (const c of (codes || "0").split(";")) {
         if (c === "2") dim = true;
-        else if (c === "0" || c === "22" || c === "") dim = false;
+        else if (c === "0" || c === "") { dim = false; colour = ""; }
+        else if (c === "22") dim = false;
+        else if (c === "31" || c === "91") colour = "e";
+        else if (c === "33" || c === "93") colour = "w";
+        else if (c === "39" || /^3[0-7]$|^9[0-7]$/.test(c)) colour = "";
+        if (first === null && (colour || dim)) first = { dim, colour };
       }
       return "";
     });
-    if (!partial) this.dim = dim;
-    const text = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
+    if (!partial) { this.dim = dim; this.colour = colour; }
+    const shown = first || start;
+    let text = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
     let cls = "";
-    if (startDim || /^\x1b\[2m/.test(raw)) cls = /^\[human:/.test(text) ? "h" : "d";
-    if (/<err>|\bFAIL(ED)?\b|\bASSERTION FAIL|\bFATAL\b|Kernel panic/.test(text)) cls = "e";
+    let tag = null;
+    // Lines sent to the board: "[human:Fame] > cmd" or "[agent:claude-1] > cmd".
+    const sent = /^\[(human|agent):([^\]]*)\] > /.exec(text);
+    if (sent) {
+      const me = state && state.daemon && state.daemon.human;
+      const mine = sent[1] === "human" && (!me || sent[2] === me);
+      tag = h("span", { class: `who ${mine ? "you" : "agent"}` }, mine ? "[you]" : `[${sent[2]}]`);
+      text = text.slice(sent[0].length - 2); // keep "> cmd"
+      cls = mine ? "h" : "a";
+    } else if (shown.dim || start.dim) {
+      cls = "d";
+    }
+    // Zephyr marks the level even with log colours off, so <err>/<wrn> win over ANSI.
+    if (/<err>|\bASSERTION FAIL|\bFATAL\b|Kernel panic|\bFAIL(ED)?\b/.test(text)) cls = "e";
     else if (/<wrn>|\bWARN(ING)?\b/.test(text)) cls = "w";
-    return h("div", { class: cls }, text || "​");
+    else if (!sent && shown.colour) cls = shown.colour;
+    return h("div", { class: cls }, tag, text || "​");
   },
+
 };
 
 // ------------------------------------------------------------------ activity feed
@@ -709,6 +918,7 @@ function describe(ev) {
     case "lease.op": return [`${sess(lease ? lease.session_id : "")} ${typeof d.op === "string" ? d.op : JSON.stringify(d.op)} on ${d.board}`];
     case "board.state": return [`${d.board} is now ${(STATUS[d.state] || d.state).toLowerCase()}${d.held_by ? ` by ${who(d.held_by)}` : ""}${d.note ? `: ${d.note}` : ""}`,
       ["OFFLINE", "NEEDS_RECOVER"].includes(d.state) ? "err" : ""];
+    case "board.shell": return [`${d.board} shell: ${d.available ? `${d.count} commands from the flashed image` : "no commands found"}`];
     case "board.console": return [`${d.board} console detected: ${d.console && d.console.resolved}${d.console && d.console.method ? ` (${d.console.method})` : ""}`];
     case "op.started": return [`${sess(d.op.session)} started ${d.op.kind} on ${d.op.board}`];
     case "op.finished": {
@@ -770,6 +980,7 @@ function connectEvents() {
     if (ev.seq && ev.seq <= lastSeq) return;
     if (ev.seq) lastSeq = ev.seq;
     const shown = addEvent(ev);
+    if (ev.kind === "board.shell" && ev.board === shell.board) shell.stamp = null;
     // Replayed history does not toast; only events from the last few seconds do.
     if ((ev.kind === "notify" || ev.kind === "session.lost") && ev.ts > nowS() - 5) {
       if (shown) { toast(shown.text, shown.level); notifyOs(shown.text); }
