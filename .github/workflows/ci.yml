@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  style:
+    name: Style (pre-commit)
+    runs-on: ubuntu-latest
+    env:
+      # Ruff findings show up as inline annotations on the PR diff.
+      RUFF_OUTPUT_FORMAT: github
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      - run: pip install pre-commit==4.6.2
+      - run: pre-commit run --all-files --show-diff-on-failure --color=always
+
+  check:
+    name: Types & unit tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            backend/pyproject.toml
+      - name: Look for Python code
+        id: scan
+        run: |
+          {
+            echo "backend=$([ -f backend/pyproject.toml ] && echo true || echo false)"
+            echo "python=$([ -n "$(git ls-files 'backend/*.py')" ] && echo true || echo false)"
+            echo "tests=$([ -d backend/tests ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          if [ "${{ steps.scan.outputs.backend }}" = true ]; then pip install -e ./backend; fi
+      - name: Type check (mypy)
+        if: steps.scan.outputs.python == 'true'
+        run: mypy
+      - name: Unit tests (pytest, integration excluded)
+        if: steps.scan.outputs.tests == 'true'
+        run: |
+          # Exit code 5 means "no tests collected", which is fine while tests are optional.
+          pytest backend/tests -m "not integration" -q || [ $? -eq 5 ]

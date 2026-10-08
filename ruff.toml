@@ -1,0 +1,48 @@
+# Ruff config for the whole repo (lint + format).
+# Kept at the root so backend/ and any future Python packages share one style.
+# Don't add [tool.ruff] to a nested pyproject.toml: ruff uses the nearest config
+# and would silently ignore this one.
+
+target-version = "py311"
+line-length = 100
+extend-exclude = ["prototype"]
+
+[lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # isort
+  "N",        # pep8-naming
+  "UP",       # pyupgrade
+  "B",        # bugbear: likely bugs
+  "A",        # shadowing builtins
+  "C4",       # comprehensions
+  "SIM",      # simplifications
+  "RET",      # return consistency
+  "PTH",      # pathlib over os.path (Windows-friendly)
+  "ASYNC",    # asyncio pitfalls (blocking calls in async code)
+  "RUF",      # ruff-specific
+  "PL",       # pylint subset
+  "TRY",      # exception handling
+  "S",        # bandit: security smells
+  "LOG",      # logging misuse
+  "PIE",
+  "T20",      # stray print()
+]
+ignore = [
+  "E501",     # line length: the formatter owns it
+  "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",  # complexity counts: too noisy for now
+  "PLC0415",  # imports inside functions: used for optional hardware libraries
+  "PLR2004",  # magic numbers: protocol constants are fine
+  "TRY003",   # long messages in exceptions
+  "S101",     # assert
+  "S603", "S607",  # subprocess: we shell out to west/nrfjprog/JLink by design
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["S", "PLR", "T20"]
+"**/cli.py" = ["T20"]
+
+[format]
+quote-style = "double"
+line-ending = "lf"

@@ -23,4 +23,20 @@ Agents queue for a board, then flash, debug and run integration tests on it. A p
 
 ## Status
 
-Early design. The backend is in progress; the dashboard design is on hold.
+Early design. The dashboard prototype is simulated; the backend is in progress.
+
+## Development
+
+Style and type checks run on every pull request (`.github/workflows/ci.yml`). Run the same checks locally:
+
+```sh
+pip install -r requirements-dev.txt
+pre-commit install          # ruff lint + format and file hygiene on each commit
+pre-commit run --all-files  # what the CI "Style" job runs
+mypy                        # what the CI "Types" step runs (strict)
+pytest backend/tests -m "not integration"
+```
+
+Tool settings live at the repo root: `ruff.toml`, `mypy.ini`, `.pre-commit-config.yaml`. Keep `[tool.ruff]` and `[tool.mypy]` out of `backend/pyproject.toml`, so there is one source of truth.
+
+Integration tests (`@pytest.mark.integration`) never run by default. Start them from **Actions > Integration > Run workflow**, choosing `simulated` or `hardware` (a self-hosted runner labelled `arbiter-hw` with the boards attached), or add the `run-integration` label to a pull request.
