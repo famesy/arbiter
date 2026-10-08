@@ -215,14 +215,17 @@ def test_stale_sessions_are_dropped():
     idle_cli = s.register_session("cli", "b")
     holder = s.register_session("cli", "c")
     s.acquire(holder.id, "b1")
+    def ended() -> list[bool]:
+        return [x.ended for x in (killed, idle_cli, holder)]
+
     clock.advance(60)
     s.tick()
-    assert killed.ended and not idle_cli.ended
+    assert ended() == [True, False, False]
     clock.advance(3600)
     s.tick()
-    assert idle_cli.ended and not holder.ended
+    assert ended() == [True, True, False]
     s.heartbeat(killed.id)
-    assert not killed.ended
+    assert ended() == [False, True, False]
 
 
 # ------------------------------------------------------------------ discover and doctor
