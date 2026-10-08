@@ -260,6 +260,9 @@ main {
   border: 1px solid var(--line);
 }
 #term .d { color: var(--term-dim); }
+#term .who { font-weight: 700; margin-right: 6px; }
+#term .a { color: #fff; box-shadow: inset 2px 0 0 var(--term-dim); margin: 1px -6px; padding: 0 6px; }
+#term .a .who { color: var(--term-dim); }
 #term .h { color: #fff; font-weight: 700; background: rgba(255, 255, 255, 0.09); border-radius: 4px; margin: 1px -6px; padding: 0 6px; }
 #term .w { color: var(--term-warn); }
 #term .e { color: var(--term-err); }

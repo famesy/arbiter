@@ -793,6 +793,7 @@ const term = {
   partial: null, // element holding the current unfinished line
   pending: "",
   dim: false,
+  colour: "",
   lines: 0,
 
   open(board, channel) {
@@ -804,6 +805,7 @@ const term = {
     this.partial = null;
     this.pending = "";
     this.dim = false;
+    this.colour = "";
     this.lines = 0;
     const dec = new TextDecoder();
     const ws = new WebSocket(wsUrl(`/api/boards/${encodeURIComponent(board)}/console?channel=${encodeURIComponent(channel)}&scrollback=65536`));
@@ -849,24 +851,47 @@ const term = {
   },
 
   lineEl(raw, partial) {
-    // Keep only the ANSI state we show (dim = arbiter notes); drop colours and cursor codes.
+    // Track the ANSI state we show: dim (arbiter notes) and the firmware's own red and
+    // yellow. Other colours and cursor codes are dropped.
     let dim = this.dim;
-    const startDim = dim;
+    let colour = this.colour;
+    const start = { dim, colour };
+    let first = null;
     raw.replace(/\x1b\[([0-9;]*)m/g, (_, codes) => {
       for (const c of (codes || "0").split(";")) {
         if (c === "2") dim = true;
-        else if (c === "0" || c === "22" || c === "") dim = false;
+        else if (c === "0" || c === "") { dim = false; colour = ""; }
+        else if (c === "22") dim = false;
+        else if (c === "31" || c === "91") colour = "e";
+        else if (c === "33" || c === "93") colour = "w";
+        else if (c === "39" || /^3[0-7]$|^9[0-7]$/.test(c)) colour = "";
+        if (first === null && (colour || dim)) first = { dim, colour };
       }
       return "";
     });
-    if (!partial) this.dim = dim;
-    const text = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
+    if (!partial) { this.dim = dim; this.colour = colour; }
+    const shown = first || start;
+    let text = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
     let cls = "";
-    if (startDim || /^\x1b\[2m/.test(raw)) cls = /^\[human:/.test(text) ? "h" : "d";
-    if (/<err>|\bFAIL(ED)?\b|\bASSERTION FAIL|\bFATAL\b|Kernel panic/.test(text)) cls = "e";
+    let tag = null;
+    // Lines sent to the board: "[human:Fame] > cmd" or "[agent:claude-1] > cmd".
+    const sent = /^\[(human|agent):([^\]]*)\] > /.exec(text);
+    if (sent) {
+      const me = state && state.daemon && state.daemon.human;
+      const mine = sent[1] === "human" && (!me || sent[2] === me);
+      tag = h("span", { class: `who ${mine ? "you" : "agent"}` }, mine ? "[you]" : `[${sent[2]}]`);
+      text = text.slice(sent[0].length - 2); // keep "> cmd"
+      cls = mine ? "h" : "a";
+    } else if (shown.dim || start.dim) {
+      cls = "d";
+    }
+    // Zephyr marks the level even with log colours off, so <err>/<wrn> win over ANSI.
+    if (/<err>|\bASSERTION FAIL|\bFATAL\b|Kernel panic|\bFAIL(ED)?\b/.test(text)) cls = "e";
     else if (/<wrn>|\bWARN(ING)?\b/.test(text)) cls = "w";
-    return h("div", { class: cls }, text || "​");
+    else if (!sent && shown.colour) cls = shown.colour;
+    return h("div", { class: cls }, tag, text || "​");
   },
+
 };
 
 // ------------------------------------------------------------------ activity feed
