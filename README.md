@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/arbiter-logo-dark.svg">
+    <img src="docs/logo/arbiter-logo-light.svg" alt="arbiter logo" width="96">
+  </picture>
+</p>
+
 # arbiter
 
 A hardware-in-the-loop board broker that lets several AI coding agents (Claude Code, Codex) share one or two physical dev boards, such as Nordic nRF and STM32 boards running Zephyr RTOS.
