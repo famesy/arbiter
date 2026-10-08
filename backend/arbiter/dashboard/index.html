@@ -8,41 +8,44 @@
 </head>
 <body>
 <div id="login" hidden>
-  <h1>arbiter</h1>
-  <p>This page needs the admin token. Open it with <code>arbiter dashboard</code>, which adds the token to the link,
-     or paste the <code>token</code> value from <code>admin.json</code> in the arbiter state folder.</p>
-  <form id="login-form">
-    <input id="login-token" type="password" placeholder="admin token" autocomplete="off">
-    <button type="submit">Open dashboard</button>
-  </form>
-  <p id="login-error" class="err" hidden></p>
+  <div class="card">
+    <h1>arbiter</h1>
+    <p>Open this page with <code>arbiter dashboard</code>, which adds the admin token to the link.
+       Or paste the <code>token</code> value from <code>admin.json</code> in the arbiter state folder.</p>
+    <form id="login-form">
+      <input id="login-token" type="password" placeholder="Admin token" autocomplete="off">
+      <button type="submit" class="primary">Open dashboard</button>
+    </form>
+    <p id="login-error" class="err" hidden></p>
+  </div>
 </div>
 
 <div id="app" hidden>
   <header>
     <span class="brand">arbiter</span>
-    <span id="conn" class="muted">connecting</span>
+    <span id="conn" class="pill"><span class="dot"></span><span id="conn-text">connecting</span></span>
     <span id="summary" class="muted"></span>
     <span class="spacer"></span>
     <button id="pause-all" title="Pause every agent that holds a board">Pause all agents</button>
   </header>
-  <div id="alerts"></div>
-  <main>
-    <section>
-      <h2>Boards</h2>
-      <div id="boards"></div>
-      <div id="probes"></div>
-      <div class="panel">
-        <h2>Agents</h2>
-        <div id="sessions"></div>
+  <div class="wrap">
+    <div id="alerts"></div>
+    <main>
+      <div class="col">
+        <div class="card">
+          <h2>Boards <span id="boards-count" class="count"></span></h2>
+          <div id="boards"></div>
+          <div id="probes"></div>
+        </div>
+        <div class="card">
+          <h2>Agents <span id="agents-count" class="count"></span></h2>
+          <div id="sessions" class="scroll-x"></div>
+        </div>
       </div>
-    </section>
-    <section id="detail"></section>
-  </main>
-  <div style="padding: 0 16px 24px">
-    <div class="panel">
-      <h2>Activity <label class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">
-        <input type="checkbox" id="feed-filter"> selected board only</label></h2>
+      <div id="detail" class="col"></div>
+    </main>
+    <div class="card" style="margin-top: var(--s5)">
+      <h2>Activity <label class="check"><input type="checkbox" id="feed-filter"> Selected board only</label></h2>
       <div id="feed"></div>
     </div>
   </div>

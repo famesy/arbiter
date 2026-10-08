@@ -15,7 +15,7 @@ function h(tag, attrs, ...kids) {
     else if (v === true) el.setAttribute(k, "");
     else el.setAttribute(k, v);
   }
-  for (const kid of kids.flat()) {
+  for (const kid of kids.flat(Infinity)) {
     if (kid === null || kid === undefined || kid === false) continue;
     el.append(kid instanceof Node ? kid : String(kid));
   }
@@ -23,7 +23,7 @@ function h(tag, attrs, ...kids) {
 }
 
 function fill(el, ...kids) {
-  el.replaceChildren(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false));
+  el.replaceChildren(...kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
 }
 
 // Re-render only when the data changed, and never while the user is typing in it.
@@ -262,24 +262,40 @@ function alerts() {
 }
 
 // ------------------------------------------------------------------ rendering
+function statusPill(b) {
+  const st = boardStatus(b);
+  const cls = st.level || (b.state === "AVAILABLE" ? "free" : ["MAINTENANCE"].includes(b.state) ? "" : "busy");
+  return h("span", { class: `pill ${cls}` }, h("span", { class: "dot" }), st.text);
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 function render() {
   if (!state) return;
   const leased = state.boards.filter((b) => b.state === "LEASED").length;
-  fill($("#summary"), `${state.boards.length} board${state.boards.length === 1 ? "" : "s"}, ${leased} in use, ${(state.queue || []).length} waiting`);
+  const waiting = (state.queue || []).length;
+  fill($("#summary"), `${plural(state.boards.length, "board")} · ${leased} in use · ${waiting} waiting`);
   $("#pause-all").disabled = leased === 0;
+  fill($("#boards-count"), String(state.boards.length));
 
   const al = alerts();
-  renderIf($("#alerts"), JSON.stringify(al.map((a) => [a.level, a.text])), () =>
+  renderIf($("#alerts"), JSON.stringify([selected, al.map((a) => [a.level, a.text])]), () =>
     al.map((a) => h("div", { class: `alert ${a.level}` },
       h("span", { class: "text" }, a.text),
-      a.board && a.board !== selected ? h("button", { class: "small", onclick: () => select(a.board) }, "Show") : null,
-      a.actions || [])));
+      h("span", { class: "btn-row" },
+        a.actions || [],
+        a.board && a.board !== selected ? h("button", { class: "small", onclick: () => select(a.board) }, "Show board") : null))));
 
-  fill($("#boards"), state.boards.map(boardCard));
+  fill($("#boards"), state.boards.length ? state.boards.map(boardCard) : h("div", { class: "empty" }, "No boards configured."));
   renderProbes();
   renderSessions();
   renderDetail();
   renderFeed();
+}
+
+function kv(rows) {
+  return h("div", { class: "kv" }, rows.filter(Boolean).map(([k, v, cls]) =>
+    [h("span", { class: "k" }, k), h("span", { class: `v ${cls || ""}` }, v)]));
 }
 
 function boardCard(b) {
@@ -288,42 +304,49 @@ function boardCard(b) {
   const q = queueFor(b);
   const left = leaseLeft(b);
   const level = st.level || (fr && fr.level === "err" ? "err" : "");
-  return h("div", { class: `board ${b.id === selected ? "sel" : ""} ${level}`, onclick: () => select(b.id) },
-    h("div", { class: "top" },
-      h("span", { class: "name" }, b.id),
-      h("span", { class: `tag ${st.level} ${b.state === "AVAILABLE" ? "" : "solid"}` }, st.text)),
-    h("div", { class: "muted mono", style: "font-size:12px" }, b.platform, b.serial ? ` · probe ${b.serial}` : ""),
-    h("div", { class: "rows" },
-      b.lease ? [h("span", { class: "k" }, "holder"), h("span", {}, who(b.lease.holder))] : null,
-      left ? [h("span", { class: "k" }, "lease"), h("span", {}, left)] : null,
-      [h("span", { class: "k" }, "console"), h("span", {}, consoleSource(b))],
-      fr ? [h("span", { class: "k" }, "last flash"), h("span", { class: fr.level }, fr.text)] : null,
-      q.length ? [h("span", { class: "k" }, "waiting"), h("span", {}, q.map((e) => e.who).join(", "))] : null,
-      b.power ? [h("span", { class: "k" }, "power"), h("span", { class: b.power.on ? "" : "warn" },
-        b.power.on ? `on, ${(b.power.mv / 1000).toFixed(2)} V` : "off")] : null));
+  return h("div", {
+    class: `board ${b.id === selected ? "sel" : ""} ${level}`,
+    tabindex: "0",
+    role: "button",
+    onclick: () => select(b.id),
+    onkeydown: (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(b.id); } },
+  },
+    h("div", { class: "top" }, h("span", { class: "name" }, b.id), statusPill(b)),
+    h("div", { class: "sub mono" }, b.platform, b.serial ? ` · ${b.serial}` : ""),
+    kv([
+      b.lease && ["Holder", who(b.lease.holder)],
+      left && ["Lease", left],
+      ["Console", consoleSource(b)],
+      fr && ["Last flash", fr.text, fr.level],
+      q.length && ["Waiting", q.map((e) => e.who).join(", ")],
+      b.power && ["Power", b.power.on ? `On · ${(b.power.mv / 1000).toFixed(2)} V` : "Off", b.power.on ? "" : "warn"],
+    ]));
 }
 
 function renderProbes() {
   const ps = state.unassigned_probes || [];
-  renderIf($("#probes"), JSON.stringify(ps), () => ps.length ? h("div", { class: "board", style: "cursor:default" },
+  renderIf($("#probes"), JSON.stringify(ps), () => ps.length ? h("div", { class: "board", style: "cursor:default;margin-top:var(--s2)" },
     h("div", { class: "name" }, "New probe found"),
-    ps.map((p) => h("div", { class: "mono", style: "font-size:12px" }, `${p.serial} ${p.kind || ""} ${p.board || ""}`)),
-    h("div", { class: "hint muted" }, "Run ", h("code", {}, "arbiter discover"), " for a config block, add it to config.toml and restart arbiterd.")) : []);
+    ps.map((p) => h("div", { class: "sub mono" }, `${p.serial} ${p.kind || ""} ${p.board || ""}`)),
+    h("div", { class: "hint" }, "Run ", h("code", {}, "arbiter discover"), " for a config block, add it to config.toml and restart arbiterd.")) : []);
 }
 
 function renderSessions() {
-  const ss = (state.sessions || []).filter((s) => !s.ended);
   const holding = {};
   for (const b of state.boards) if (b.lease) holding[b.lease.session_id] = b.id;
   const waiting = {};
   for (const e of state.queue || []) waiting[e.session] = e.wants;
-  renderIf($("#sessions"), JSON.stringify([ss, holding, waiting]), () => ss.length ? h("table", {},
-    h("tr", {}, h("th", {}, "agent"), h("th", {}, "kind"), h("th", {}, "doing")),
-    ss.map((s) => h("tr", { class: s.alive ? "" : "warn" },
-      h("td", {}, s.label, s.branch ? h("div", { class: "muted", style: "font-size:12px" }, `${s.repo || ""} ${s.branch}`) : null),
-      h("td", {}, s.agent_kind),
-      h("td", {}, holding[s.id] ? `holds ${holding[s.id]}` : waiting[s.id] ? `waiting for ${waiting[s.id]}` : s.alive ? "idle" : "not responding")))) :
-    h("div", { class: "muted" }, "No agents connected."));
+  // Hide agents that have gone quiet and hold nothing; they only add noise.
+  const ss = (state.sessions || []).filter((s) => !s.ended && (s.alive || holding[s.id] || waiting[s.id]));
+  fill($("#agents-count"), String(ss.length));
+  renderIf($("#sessions"), JSON.stringify([ss.map((s) => [s.id, s.alive]), holding, waiting]), () => ss.length ? h("table", {},
+    ss.map((s) => h("tr", {},
+      h("td", {}, h("div", {}, s.label), h("div", { class: "sub" }, s.agent_kind, s.branch ? ` · ${s.branch}` : "")),
+      h("td", { class: !s.alive ? "warn" : "", style: "text-align:right" },
+        holding[s.id] ? h("span", { class: "pill busy" }, holding[s.id]) :
+        waiting[s.id] ? h("span", { class: "muted" }, `waiting for ${waiting[s.id]}`) :
+        s.alive ? h("span", { class: "muted" }, "idle") : "not responding")))) :
+    h("div", { class: "empty" }, "No agents connected. Agents appear here when they start with the arbiter plugin."));
 }
 
 // ------------------------------------------------------------------ detail
@@ -333,49 +356,52 @@ const D = {}; // detail sub-elements
 function select(id) {
   selected = id;
   render();
+  if (window.innerWidth <= 900) $("#detail").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderDetail() {
   const root = $("#detail");
   const b = state.boards.find((x) => x.id === selected);
-  if (!b) { fill(root, h("div", { class: "muted" }, "No boards configured.")); detailFor = null; term.close(); return; }
+  if (!b) { fill(root, h("div", { class: "card empty" }, "Select a board.")); detailFor = null; term.close(); return; }
   if (detailFor !== b.id) {
     detailFor = b.id;
     D.head = h("div");
-    D.controls = h("div", { class: "controls" });
-    D.tabs = h("div", { class: "tabs" });
-    D.term = h("pre", { id: "term" });
-    D.input = h("input", { placeholder: "type a command for the board, Enter to send", autocomplete: "off", spellcheck: "false" });
-    D.send = h("button", {}, "Send");
-    D.hint = h("div", { class: "hint muted" });
-    D.queue = h("div");
+    D.controls = h("div", { class: "controls btn-row" });
+    D.tabs = h("div", { class: "tabs", role: "tablist" });
+    D.term = h("pre", { id: "term", tabindex: "0" });
+    D.input = h("input", { placeholder: "Type a command, Enter to send", autocomplete: "off", spellcheck: "false" });
+    D.send = h("button", { class: "primary" }, "Send");
+    D.hint = h("div", { class: "hint" });
+    D.queue = h("div", { class: "scroll-x" });
     D.power = h("div");
-    D.tests = h("div");
+    D.tests = h("div", { class: "scroll-x" });
+    D.queueCount = h("span", { class: "count" });
     const form = h("form", { class: "term-input", onsubmit: (ev) => { ev.preventDefault(); sendLine(); } }, D.input, D.send);
     fill(root,
-      D.head, D.controls,
-      h("div", { class: "panel" }, h("h2", {}, "Terminal"), D.tabs, D.term, form, D.hint),
-      h("div", { class: "panel" }, h("h2", {}, "Queue"), D.queue),
+      h("div", { class: "card" }, D.head, D.controls),
+      h("div", { class: "card" },
+        h("div", { class: "term-bar" }, h("h2", { style: "margin:0" }, "Terminal"), D.tabs),
+        D.term, form, D.hint),
+      h("div", { class: "card" }, h("h2", {}, "Queue ", D.queueCount), D.queue),
       D.power,
-      h("div", { class: "panel" }, h("h2", {}, "Test runs"), D.tests));
+      h("div", { class: "card" }, h("h2", {}, "Test runs"), D.tests));
     term.open(b.id, term.channel && term.board === b.id ? term.channel : "all");
   }
-  const st = boardStatus(b);
   const left = leaseLeft(b);
+  const ports = (b.ports || []).map((p) => p.device || p.port || p.name || "").filter(Boolean);
   fill(D.head,
-    h("div", { class: "detail-head" },
-      h("span", { class: "name" }, b.id),
-      h("span", { class: `tag ${st.level} solid` }, st.text),
-      h("span", { class: "muted" }, b.platform),
-      b.serial ? h("span", { class: "muted mono" }, `probe ${b.serial}`) : null,
-      b.ports && b.ports.length ? h("span", { class: "muted mono" }, b.ports.map((p) => p.device || p.port || p.name || "").filter(Boolean).join(", ")) : null),
-    b.lease ? h("div", {}, "Held by ", h("b", {}, who(b.lease.holder)),
-      b.lease.reason ? ` for "${b.lease.reason}"` : "",
-      left ? `, lease ${left}` : "",
-      b.lease.paused_by ? `. Paused by ${who(b.lease.paused_by)}${b.lease.pause_reason ? `: ${b.lease.pause_reason}` : ""}` : "",
-      b.op && b.op.running ? `. Running ${b.op.kind} for ${dur(b.op.elapsed_s)}` : "") : null,
-    h("div", { class: "muted" }, "Console: ", consoleSource(b)));
-  renderIf(D.controls, `${b.state}|${b.lease && b.lease.state}|${!!b.op}`, () => controls(b));
+    h("div", { class: "detail-head" }, h("span", { class: "name" }, b.id), statusPill(b)),
+    h("div", { class: "detail-meta" },
+      h("span", { class: "mono" }, b.platform),
+      b.serial ? h("span", { class: "mono" }, `probe ${b.serial}`) : null,
+      ports.length ? h("span", { class: "mono" }, ports.join(", ")) : null,
+      h("span", {}, `Console ${consoleSource(b)}`)),
+    b.lease ? h("div", { class: "detail-holder" }, "Held by ", h("b", {}, who(b.lease.holder)),
+      b.lease.reason ? ` for “${b.lease.reason}”` : "",
+      left ? h("span", { class: "muted" }, ` · lease ${left}`) : "",
+      b.lease.paused_by ? h("span", { class: "muted" }, ` · paused by ${who(b.lease.paused_by)}${b.lease.pause_reason ? `: ${b.lease.pause_reason}` : ""}`) : "",
+      b.op && b.op.running ? h("span", { class: "muted" }, ` · ${b.op.kind} running for ${dur(b.op.elapsed_s)}`) : "") : null);
+  renderIf(D.controls, `${b.id}|${b.state}|${b.lease && b.lease.state}|${!!b.op}`, () => controls(b));
   renderTabs(b);
   renderTermHint(b);
   renderQueue(b);
@@ -389,31 +415,36 @@ function controls(b) {
   const btn = (label, fn, attrs) => h("button", { ...(attrs || {}), onclick: fn }, label);
   const out = [];
   const ls = b.lease && b.lease.state;
+  const holder = who(b.lease && b.lease.holder);
+  const revoke = () => btn("Revoke lease", () => confirm(`End ${holder}'s lease on ${bid}? It goes back in the queue.`) && post("revoke", {}, "Revoke"), { class: "danger" });
   if (b.state === "LEASED") {
     out.push(btn("Pause agent", () => post("pause", {}, "Pause"),
-      { title: "The agent keeps its lease but can't use the board. A flash in progress finishes first." }));
+      { class: "primary", title: "The agent keeps its lease but can't use the board. A flash in progress finishes first." }));
     out.push(btn("Take over", () => post("take", {}, "Take over"),
       { title: "You get the board now; the agent goes back to the front of the queue" }));
-    out.push(btn("Extend 15 min", () => post("extend", { minutes: 15 }, "Extend")));
-    out.push(btn("Revoke lease", () => confirm(`End ${who(b.lease.holder)}'s lease on ${bid}?`) && post("revoke", {}, "Revoke"), { class: "danger" }));
+    out.push(btn("+15 min", () => post("extend", { minutes: 15 }, "Extend"), { title: "Extend the lease by 15 minutes" }));
+    out.push(revoke());
   } else if (b.state === "PAUSED") {
-    out.push(btn(ls === "PAUSING" ? "Resume (pausing…)" : "Resume agent", () => post("resume", {}, "Resume")));
+    out.push(btn(ls === "PAUSING" ? "Resume (pausing…)" : "Resume agent", () => post("resume", {}, "Resume"), { class: "primary" }));
     out.push(btn("Take over", () => post("take", {}, "Take over")));
-    out.push(btn("Revoke lease", () => confirm(`End ${who(b.lease && b.lease.holder)}'s lease on ${bid}?`) && post("revoke", {}, "Revoke"), { class: "danger" }));
+    out.push(revoke());
   } else if (b.state === "HUMAN") {
-    out.push(btn("Give back", () => post("release", {}, "Give back"), { title: "Release the board to the next agent in the queue" }));
+    out.push(btn("Give back", () => post("release", {}, "Give back"), { class: "primary", title: "Release the board to the next agent in the queue" }));
   } else if (b.state === "AVAILABLE") {
-    out.push(btn("Take board", () => post("take", {}, "Take")));
+    out.push(btn("Take board", () => post("take", {}, "Take"), { class: "primary", title: "Hold the board yourself; agents wait until you give it back" }));
   }
   const canDrive = !["LEASED", "OFFLINE"].includes(b.state);
-  if (b.capabilities.includes("reset")) out.push(btn("Reset", () => post("reset", {}, "Reset"), { disabled: !canDrive, title: canDrive ? null : "Pause the agent or take over first" }));
+  const why = canDrive ? null : "Pause the agent or take over first";
+  const more = [];
+  if (b.capabilities.includes("reset")) more.push(btn("Reset", () => post("reset", {}, "Reset"), { disabled: !canDrive, title: why }));
   if (b.capabilities.includes("recover")) {
-    out.push(btn("Recover (erase)", () => confirm(`Erase and recover ${bid}? This wipes its flash.`) && post("recover", {}, "Recover"),
-      { class: "danger", disabled: !canDrive, title: canDrive ? null : "Pause the agent or take over first" }));
+    more.push(btn("Erase & recover", () => confirm(`Erase and recover ${bid}? This wipes its flash.`) && post("recover", {}, "Recover"),
+      { class: "danger", disabled: !canDrive, title: why }));
   }
-  if (b.state === "MAINTENANCE") out.push(btn("End maintenance", () => post("maintenance", { on: false }, "Maintenance")));
-  else if (["AVAILABLE", "OFFLINE", "NEEDS_RECOVER"].includes(b.state)) out.push(btn("Maintenance", () => post("maintenance", { on: true }, "Maintenance"), { title: "Take the board out of service" }));
-  return out;
+  if (b.state === "MAINTENANCE") more.push(btn("End maintenance", () => post("maintenance", { on: false }, "Maintenance"), { class: "primary" }));
+  else if (["AVAILABLE", "OFFLINE", "NEEDS_RECOVER"].includes(b.state)) more.push(btn("Maintenance", () => post("maintenance", { on: true }, "Maintenance"), { title: "Take the board out of service" }));
+  if (out.length && more.length) out.push(h("span", { class: "sep" }));
+  return [...out, ...more];
 }
 
 function renderTabs(b) {
@@ -422,17 +453,19 @@ function renderTabs(b) {
   const list = [...names];
   renderIf(D.tabs, JSON.stringify([list, term.channel, prim]), () => list.map((n) => h("button", {
     class: n === term.channel ? "on" : "",
-    title: n === "all" ? "every channel, tagged" : n === prim ? "primary console" : null,
-    onclick: () => { term.open(b.id, n); renderTabs(b); },
-  }, n === prim ? `${n} *` : n)));
+    role: "tab",
+    title: n === "all" ? "Every channel, tagged" : n === prim ? "Primary console" : null,
+    onclick: () => { term.open(b.id, n); renderTabs(b); renderTermHint(b); },
+  }, n === "all" ? "All" : n, n === prim ? h("span", { class: "muted" }, " · primary") : null)));
 }
 
 function renderTermHint(b) {
   const agentHolds = b.state === "LEASED";
   D.input.disabled = agentHolds || b.state === "OFFLINE";
   D.send.disabled = D.input.disabled;
+  D.input.placeholder = agentHolds ? "An agent holds this board" : "Type a command, Enter to send";
   fill(D.hint, agentHolds
-    ? `${who(b.lease.holder)} holds this board. Pause it or take over to type commands.`
+    ? `${who(b.lease.holder)} holds this board. Pause it or take over to type.`
     : term.channel === "all" ? "Commands go to the primary console." : `Commands go to ${term.channel}.`);
 }
 
@@ -449,28 +482,29 @@ async function sendLine() {
 function renderQueue(b) {
   const q = queueFor(b);
   const all = state.queue || [];
+  fill(D.queueCount, q.length ? String(q.length) : "");
   renderIf(D.queue, JSON.stringify(q.map((e) => [e.ticket, e.priority, e.pinned, Math.floor(e.waiting_s / 10)])), () => {
-    if (!q.length) return h("div", { class: "muted" }, "Nobody is waiting.");
+    if (!q.length) return h("div", { class: "empty" }, "Nobody is waiting for this board.");
     const qa = (e, action, body, label) => act(label, () => api("POST", `/api/admin/queue/${e.ticket}/${action}`, body || {}));
     return h("table", {},
-      h("tr", {}, h("th", {}, "#"), h("th", {}, "agent"), h("th", {}, "wants"), h("th", {}, "priority"), h("th", {}, "waiting"), h("th", {})),
+      h("tr", {}, h("th", {}, "#"), h("th", {}, "Agent"), h("th", {}, "Priority"), h("th", {}, "Waiting"), h("th", {})),
       q.map((e, i) => {
         // move takes an index in the whole queue without this entry
         const others = all.filter((x) => x.ticket !== e.ticket);
         const up = i > 0 ? others.indexOf(q[i - 1]) : -1;
         const down = i < q.length - 1 ? others.indexOf(q[i + 1]) + 1 : -1;
         const prio = Object.entries({ low: 0, normal: 50, high: 80, urgent: 100 }).find(([, v]) => v === e.priority);
+        const urgent = e.priority >= 100 && e.pinned;
         return h("tr", {},
-          h("td", {}, i + 1),
-          h("td", {}, e.who, e.reason ? h("div", { class: "muted", style: "font-size:12px" }, e.reason) : null),
-          h("td", { class: "mono" }, e.wants),
-          h("td", {}, prio ? prio[0] : e.priority, e.pinned ? " · front" : ""),
-          h("td", {}, dur(e.waiting_s)),
-          h("td", { class: "actions" },
-            h("button", { class: "small", disabled: up < 0, title: "Move up", onclick: () => qa(e, "move", { index: up }, "Move") }, "↑"), " ",
-            h("button", { class: "small", disabled: down < 0, title: "Move down", onclick: () => qa(e, "move", { index: down }, "Move") }, "↓"), " ",
-            h("button", { class: "small", title: "Urgent: move to the front", onclick: () => qa(e, "priority", { priority: "urgent" }, "Urgent").then(() => qa(e, "pin", { pinned: true }, "Urgent")) }, "Urgent"), " ",
-            h("button", { class: "small danger", title: "Remove from the queue", onclick: () => confirm(`Remove ${e.who} from the queue?`) && qa(e, "cancel", {}, "Remove") }, "Remove")));
+          h("td", { class: "num muted" }, i + 1),
+          h("td", {}, h("div", {}, e.who), h("div", { class: "sub" }, e.reason || `wants ${e.wants}`)),
+          h("td", {}, h("span", { class: `pill ${urgent ? "busy" : ""}` }, prio ? prio[0] : e.priority, e.pinned && !urgent ? " · front" : "")),
+          h("td", { class: "num" }, dur(e.waiting_s)),
+          h("td", { class: "actions" }, h("span", { class: "btn-row" },
+            h("button", { class: "icon", disabled: up < 0, title: "Move up", "aria-label": "Move up", onclick: () => qa(e, "move", { index: up }, "Move") }, "↑"),
+            h("button", { class: "icon", disabled: down < 0, title: "Move down", "aria-label": "Move down", onclick: () => qa(e, "move", { index: down }, "Move") }, "↓"),
+            h("button", { class: "small", disabled: urgent, title: "Mark urgent and move to the front", onclick: () => qa(e, "priority", { priority: "urgent" }, "Urgent").then(() => qa(e, "pin", { pinned: true }, "Urgent")) }, "Urgent"),
+            h("button", { class: "small danger", title: "Remove from the queue", onclick: () => confirm(`Remove ${e.who} from the queue?`) && qa(e, "cancel", {}, "Remove") }, "Remove"))));
       }));
   });
 }
@@ -486,37 +520,39 @@ function renderPower(b) {
     const pw = (action, extra, label) => act(label, () => api("POST", `/api/admin/boards/${encodeURIComponent(bid)}/power`, { action, ...(extra || {}) }));
     const canDrive = b.state !== "LEASED";
     const sw = p.supports.includes("switch");
-    const mvIn = h("input", { type: "number", step: "50", min: lim.mv_min, max: lim.mv_max, value: p.mv || lim.default_mv || "" });
+    const mvIn = h("input", { type: "number", step: "50", min: lim.mv_min, max: lim.mv_max, value: p.mv || lim.default_mv || "", "aria-label": "Voltage in millivolts" });
+    const setMv = () => {
+      const mv = Number(mvIn.value);
+      if (lim.mv_min && lim.mv_max && (mv < lim.mv_min || mv > lim.mv_max)) return toast(`Voltage must be between ${lim.mv_min} and ${lim.mv_max} mV`, "warn");
+      return pw("set_voltage", { mv }, "Set voltage");
+    };
     const m = p.last;
     const hist = powerHist[b.id] || [];
-    return h("div", { class: "panel" },
-      h("h2", {}, "Power"),
-      h("div", { class: "power-row" },
-        h("span", { class: `big ${p.on ? "" : "warn"}` }, p.on ? "On" : "Off"),
+    const stat = (k, v) => h("div", { class: "stat" }, h("div", { class: "k" }, k), h("div", { class: "big" }, v));
+    return h("div", { class: "card" },
+      h("h2", {}, "Power ", h("span", { class: "count" }, p.kind)),
+      h("div", { class: "power-top" },
+        h("span", { class: `pill ${p.fault ? "err" : p.on ? "busy" : "warn"}` }, h("span", { class: "dot" }), p.fault ? `Fault: ${p.fault}` : p.on ? "On" : "Off"),
         p.mv ? h("span", { class: "big" }, `${(p.mv / 1000).toFixed(2)} V`) : null,
-        h("span", { class: "muted" }, p.kind, p.fault ? "" : ""),
-        p.fault ? h("span", { class: "tag err" }, `fault: ${p.fault}`) : null),
-      sw ? h("div", { class: "power-row", style: "margin-top:8px" },
+        lim.mv_min ? h("span", { class: "muted small-text" }, `safe range ${(lim.mv_min / 1000).toFixed(1)}–${(lim.mv_max / 1000).toFixed(1)} V`) : null),
+      sw ? h("div", { class: "power-row btn-row" },
         h("button", { disabled: !canDrive || p.on, onclick: () => pw("on", null, "Power on") }, "On"),
         h("button", { disabled: !canDrive || !p.on, onclick: () => confirm(`Power off ${bid}?`) && pw("off", null, "Power off") }, "Off"),
         h("button", { disabled: !canDrive, onclick: () => pw("cycle", null, "Power cycle") }, "Cycle"),
-        p.supports.includes("voltage") ? [mvIn, h("span", { class: "muted" }, "mV"),
-          h("button", { disabled: !canDrive, onclick: () => pw("set_voltage", { mv: Number(mvIn.value) }, "Set voltage") }, "Set"),
-          h("span", { class: "muted" }, `limits ${lim.mv_min}–${lim.mv_max} mV`)] : null) : null,
-      !canDrive ? h("div", { class: "hint muted" }, "An agent holds this board. Pause it or take over to change power.") : null,
+        p.supports.includes("voltage") ? [h("span", { class: "sep" }), mvIn, h("span", { class: "muted" }, "mV"),
+          h("button", { disabled: !canDrive, onclick: setMv }, "Set voltage")] : null) : null,
+      !canDrive ? h("div", { class: "hint" }, "An agent holds this board. Pause it or take over to change power.") : null,
       m ? h("div", { class: `stats ${m.valid === false ? "warn" : ""}` },
-        h("div", {}, h("div", { class: "k" }, "average"), h("div", { class: "big" }, ua(m.avg_ua))),
-        h("div", {}, h("div", { class: "k" }, "peak"), h("div", { class: "big" }, ua(m.peak_ua))),
-        h("div", {}, h("div", { class: "k" }, "min"), h("div", { class: "big" }, ua(m.min_ua))),
-        h("div", {}, h("div", { class: "k" }, "window"), h("div", { class: "big" }, `${(m.duration_ms / 1000).toFixed(1)} s`)),
-        m.valid === false ? h("div", {}, h("b", {}, "Not valid: "), m.invalid_reason || "debugger attached") : null) :
-        p.supports.includes("measure") ? h("div", { class: "hint muted" }, "No current measurement yet. Agents measure with measure_current.") : null,
+        stat("Average", ua(m.avg_ua)), stat("Peak", ua(m.peak_ua)), stat("Min", ua(m.min_ua)),
+        stat("Window", `${(m.duration_ms / 1000).toFixed(1)} s`),
+        m.valid === false ? h("div", { style: "flex-basis:100%" }, h("b", {}, "Not a valid measurement: "), m.invalid_reason || "a debugger was attached") : null) :
+        p.supports.includes("measure") ? h("div", { class: "hint" }, "No current measurement yet. Agents measure with measure_current.") : null,
       hist.length > 1 ? sparkline(hist) : null);
   });
 }
 
 function sparkline(hist) {
-  const W = 320, H = 60, pad = 2;
+  const W = 420, H = 64, pad = 3;
   const max = Math.max(...hist.map((x) => x.peak || x.avg)) || 1;
   const xs = (i) => pad + (i * (W - 2 * pad)) / (hist.length - 1);
   const ys = (v) => H - pad - (v / max) * (H - 2 * pad);
@@ -524,41 +560,44 @@ function sparkline(hist) {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.setAttribute("width", W);
-  svg.setAttribute("height", H);
-  for (const [k, dash] of [["peak", "3 3"], ["avg", ""]]) {
+  svg.setAttribute("preserveAspectRatio", "none");
+  for (const [k, dash, op] of [["peak", "4 4", "0.45"], ["avg", "", "1"]]) {
     const pl = document.createElementNS(ns, "polyline");
     pl.setAttribute("points", pts(k));
     pl.setAttribute("fill", "none");
     pl.setAttribute("stroke", "currentColor");
-    pl.setAttribute("stroke-width", "1.5");
+    pl.setAttribute("stroke-width", "2");
+    pl.setAttribute("stroke-linejoin", "round");
+    pl.setAttribute("vector-effect", "non-scaling-stroke");
+    pl.setAttribute("opacity", op);
     if (dash) pl.setAttribute("stroke-dasharray", dash);
     svg.append(pl);
   }
-  return h("div", { style: "margin-top:8px" }, h("div", { class: "k muted", style: "font-size:12px" },
-    `last ${hist.length} measurements: average solid, peak dashed, up to ${ua(max)}`), svg);
+  return h("div", { class: "spark" }, h("div", { class: "hint", style: "margin:0 0 var(--s2)" },
+    `Last ${hist.length} measurements · solid average, dashed peak · top ${ua(max)}`), svg);
 }
 
 function renderTests(b) {
   const runs = (state.ops || []).filter((o) => o.board === b.id && o.kind === "test").reverse();
   const sessions = Object.fromEntries((state.sessions || []).map((s) => [s.id, s.label]));
   renderIf(D.tests, JSON.stringify(runs.map((o) => [o.id, o.running, Math.floor(o.elapsed_s)])), () => runs.length ? h("table", {},
-    h("tr", {}, h("th", {}, "started"), h("th", {}, "agent"), h("th", {}, "result"), h("th", {}, "duration")),
+    h("tr", {}, h("th", {}, "Started"), h("th", {}, "Agent"), h("th", {}, "Result"), h("th", {}, "Time")),
     runs.map((o) => {
       const r = o.result || {};
       const failed = !o.running && testFailed(o);
-      return [h("tr", { class: failed ? "err" : "" },
-        h("td", {}, clock(o.started)),
+      const result = o.running ? "running…" : r.verdict || (o.error && o.error.message) || (failed ? "failed" : "passed");
+      return h("tr", { class: failed ? "err" : "" },
+        h("td", { class: "num muted" }, clock(o.started)),
         h("td", {}, sessions[o.session] || o.session),
-        h("td", { class: failed ? "err" : "" }, o.running ? "running" : r.verdict || (o.error && o.error.message) || (failed ? "failed" : "passed"),
-          r.timed_out ? " (timed out)" : "", r.cancelled ? " (cancelled)" : ""),
-        h("td", {}, dur(r.duration_s !== undefined ? r.duration_s : o.elapsed_s))),
-      (r.tail && r.tail.length) || o.log_path ? h("tr", { class: failed ? "err" : "" }, h("td", { colspan: 4 },
-        h("details", {}, h("summary", { class: "muted" }, "log"),
-          h("div", { class: "mono muted", style: "font-size:12px" }, o.log_path || ""),
-          r.junit ? h("div", { class: "mono muted", style: "font-size:12px" }, `junit: ${r.junit}`) : null,
-          r.tail ? h("pre", { class: "tail" }, r.tail.join("\n")) : null))) : null];
-    })) : h("div", { class: "muted" }, "No test runs on this board yet."));
+        h("td", { class: "result" },
+          h("span", { class: `pill ${failed ? "err" : o.running ? "" : "free"}` }, h("span", { class: "dot" }), result,
+            r.timed_out ? " · timed out" : "", r.cancelled ? " · cancelled" : ""),
+          (r.tail && r.tail.length) || o.log_path ? h("details", { style: "margin-top:var(--s1)" }, h("summary", {}, "Log"),
+            h("div", { class: "mono sub" }, o.log_path || ""),
+            r.junit ? h("div", { class: "mono sub" }, `junit: ${r.junit}`) : null,
+            r.tail ? h("pre", { class: "tail" }, r.tail.join("\n")) : null) : null),
+        h("td", { class: "num" }, dur(r.duration_s !== undefined ? r.duration_s : o.elapsed_s)));
+    })) : h("div", { class: "empty" }, "No test runs on this board yet."));
 }
 
 // ------------------------------------------------------------------ terminal
@@ -713,7 +752,7 @@ function renderFeed() {
   const only = $("#feed-filter").checked;
   const items = feed.filter((f) => !only || f.board === selected).slice(-200).reverse();
   renderIf($("#feed"), `${only}|${selected}|${feed.length}|${feed.length && feed[feed.length - 1].seq}`, () => items.length ? items.map((f) =>
-    h("div", { class: `ev ${f.level}` }, h("span", { class: "t" }, clock(f.ts)), h("span", {}, f.text))) : h("div", { class: "muted" }, "Nothing yet."));
+    h("div", { class: `ev ${f.level}` }, h("span", { class: "t" }, clock(f.ts)), h("span", {}, f.text))) : h("div", { class: "empty" }, "Nothing has happened yet."));
 }
 
 // ------------------------------------------------------------------ events socket
@@ -746,9 +785,8 @@ function connectEvents() {
 }
 
 function setConn(up) {
-  const el = $("#conn");
-  el.className = up ? "muted" : "down";
-  el.textContent = up ? "live" : "disconnected from arbiterd, retrying";
+  $("#conn").className = up ? "pill" : "pill down";
+  $("#conn-text").textContent = up ? "Live" : "Reconnecting to arbiterd";
 }
 
 // ------------------------------------------------------------------ notifications
