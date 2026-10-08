@@ -382,6 +382,9 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     async def plugins(ctx: Ctx, body: Body) -> Any:
         return available_plugins()
 
+    async def shell_commands(ctx: Ctx, body: Body) -> Any:
+        return arb.shell_commands(ctx["path"]["board"])
+
     # ------------------------------------------------------------ websockets
     async def ws_events(ws: WebSocket) -> None:
         lvl = auth.level(_token_from(ws))
@@ -480,6 +483,7 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/health", a(health), methods=["GET"]),
         Route("/api/state", a(state), methods=["GET"]),
         Route("/api/boards", a(boards), methods=["GET"]),
+        Route("/api/boards/{board}/shell", a(shell_commands), methods=["GET"]),
         Route("/api/plugins", a(plugins), methods=["GET"]),
         Route("/api/sessions", a(register), methods=["POST"]),
         Route("/api/sessions/by-external/{ext}/inbox", a(inbox_ext), methods=["GET", "POST"]),

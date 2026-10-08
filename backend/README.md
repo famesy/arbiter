@@ -104,7 +104,10 @@ and tell it in `AGENTS.md` to use the arbiter tools for anything that touches a 
    or `"any"` for `serial_expect`.
 4. `run(cmd=["west", "twister", ...])` runs a test command against the board. Twister gets
    a hardware map with only that board in it.
-5. `release_board()` when done. Leases expire if the agent stops heartbeating.
+5. `shell_commands()` lists the shell commands of the flashed image, read from its ELF
+   after every flash, so agents and the console know what can be typed even when the
+   firmware has help or tab completion turned off.
+6. `release_board()` when done. Leases expire if the agent stops heartbeating.
 
 Erasing, recovering a board and raising the supply voltage need your approval
 (`arbiter approve <id>` or the dashboard).

@@ -22,6 +22,7 @@ from ..console.detect import detect_from_build
 from ..console.hub import ConsoleHub
 from ..console.sources import CallbackSource
 from ..errors import ArbiterError
+from ..zephyr_shell import ShellCommand, ShellCommands
 from .base import BoardDriver, LineFn
 
 PROMPT = "uart:~$ "
@@ -135,6 +136,36 @@ class SimDriver(BoardDriver):
             self._out(f"[{_ts(up)}] <inf> {self.app}: Entering sleep\r\n")
         else:
             self._out(f"{line.split(maxsplit=1)[0]}: command not found\r\n")
+
+    def shell_commands(self, build_dir: Path) -> ShellCommands:
+        """The simulator's own shell, so console completion can be tried without hardware."""
+        c = ShellCommand
+        return ShellCommands(
+            True,
+            commands=[
+                c("device", "Device commands", 1, subcommands=[c("list", "List devices", 1)]),
+                c("help", "Prints the help message.", 1),
+                c(
+                    "kernel",
+                    "Kernel commands",
+                    1,
+                    subcommands=[
+                        c("uptime", "Kernel uptime.", 1),
+                        c("version", "Kernel version.", 1),
+                    ],
+                ),
+                c(
+                    "sim",
+                    "Simulator controls",
+                    1,
+                    subcommands=[
+                        c("fault", "Print a bus fault", 1),
+                        c("sleep", "Log entering sleep", 1),
+                    ],
+                ),
+                c("test", "Run the simulated test suite", 1),
+            ],
+        )
 
     # ---------------------------------------------------------------- operations
     async def flash(
