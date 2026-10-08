@@ -37,6 +37,10 @@ DEFAULT_HINTS = {
     "APPROVAL_DENIED": "The human declined this action. Do not ask again for this lease.",
     "NOT_SUPPORTED": "This board or its driver does not support that action.",
     "OUT_OF_RANGE": "The value is outside what this board allows.",
+    "POWER_FAULT": (
+        "The board's supply was switched off by a fault such as over-current. Only the human "
+        "can turn it back on; tell them what you were doing."
+    ),
     "OP_FAILED": "The operation failed. Read the log tail; fix the cause before retrying.",
     "TIMEOUT": "The operation timed out.",
     "UNAUTHORIZED": "Missing or wrong arbiter token.",

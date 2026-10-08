@@ -83,6 +83,15 @@ class PowerDevice:
     async def start(self) -> None:
         pass
 
+    def trip(self, reason: str) -> None:
+        """Mark the supply as tripped (output already off). Only a human clears it."""
+        self.on, self.state, self.fault = False, "FAULT", reason
+
+    def clear_fault(self) -> None:
+        self.fault = None
+        if self.state == "FAULT":
+            self.state = "ON" if self.on else "OFF"
+
     async def stop(self) -> None:
         pass
 
@@ -278,10 +287,6 @@ class Ppk2Power(PowerDevice):
                     await asyncio.sleep(0.01)
                 await asyncio.to_thread(ppk.stop_measuring)
                 m = summarize(samples, self.rate_hz, threshold_ua, trace_path)
-                if self.cfg.ma_max and m.max_ua > self.cfg.ma_max * 1000:
-                    await asyncio.to_thread(ppk.toggle_DUT_power, "OFF")
-                    self.on, self.fault = False, f"over-current: {m.max_ua / 1000:.1f} mA"
-                    self.state = "FAULT"
                 if debug_attached:
                     m.valid, m.invalid_reason = (
                         False,

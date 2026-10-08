@@ -119,6 +119,12 @@ Three levels, lightest first (details in `arbiter/plugins.py`):
 A supply you control with a script is `[board.power] kind = "command"` with `on`,
 `off`, `set_voltage` and `measure` commands.
 
+Each board's `[board.power]` sets its limits: `mv_min` and `mv_max` bound every voltage
+change, agents need your approval to go above `default_mv`, and `ma_max` switches the supply
+off when a measurement goes over it (only you can turn it back on). A script supply's
+`set_current_limit` command gets `ma_max` at start so the supply enforces it too. The limits
+appear under `power.limits` in `arbiter status` and the API.
+
 ## Development
 
 From the repo root:
