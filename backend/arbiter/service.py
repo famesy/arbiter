@@ -19,7 +19,7 @@ from typing import Any, TypeVar
 from . import scheduler as sch
 from .config import BoardConfig, Config, load_toolchain_env
 from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, image_dirs
-from .console.hub import ALL, ANY, ConsoleHub
+from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
 from .drivers import discovery
 from .drivers.base import BoardDriver
 from .errors import ArbiterError
@@ -334,6 +334,55 @@ class Arbiter:
         if not s:
             return session_id
         return f"{'human' if s.agent_kind == 'human' else 'agent'}:{s.label}"
+
+    def _sender(self, session_id: str) -> Sender:
+        s = self.sched.sessions.get(session_id)
+        if s is None:
+            return Sender("agent", session_id, session=session_id)
+        if s.agent_kind == "human":
+            return Sender.human(s.label)
+        return Sender("agent", f"{s.agent_kind}-{s.id[2:6]}", s.label, s.id)
+
+    async def console_send(
+        self, rt: BoardRuntime, raw: bytes, sender: Sender, channel: str | None = None
+    ) -> WriteRecord:
+        """Every write to a board goes through here: the hub tags and orders it, the
+        dashboard gets a console.write event, and when a human types on a board an agent
+        holds, the agent is told, so it doesn't take the reply for its own output."""
+        rec = await rt.hub.write(raw, sender, channel)
+        self.bus.publish("console.write", {"board": rt.cfg.id, **rec.to_dict()})
+        if sender.kind == "human":
+            slot = self.sched.boards.get(rt.cfg.id)
+            lease = self.sched.leases.get(slot.lease_token or "") if slot else None
+            if lease is not None and lease.state in sch.LIVE_LEASE_STATES:
+                who = sender.name or self.cfg.human_name
+                self.sched.notify(
+                    lease.session_id,
+                    "human_input",
+                    f"{who} typed {rec.data.rstrip()!r} on {rec.channel} of {rt.cfg.id}. "
+                    f"Output after cursor {rec.cursor} may be the reply to it, not to your "
+                    "commands.",
+                    board=rt.cfg.id,
+                    channel=rec.channel,
+                    cursor=rec.cursor,
+                    data=rec.data,
+                )
+        return rec
+
+    def _human_input(
+        self, rt: BoardRuntime, since: dict[str, int] | int, names: list[str], until: int | None
+    ) -> list[dict[str, Any]]:
+        """Lines a human typed into these channels in the window an agent is looking at."""
+        return [
+            {
+                "by": w.sender.name or "human",
+                "channel": w.channel,
+                "data": w.data,
+                "cursor": w.cursor,
+            }
+            for w in rt.hub.writes_since(since, names, kind="human")
+            if until is None or w.cursor <= until
+        ]
 
     def _lease_dir(self, lease: sch.Lease) -> Path:
         day = time.strftime("%Y%m%d", time.localtime(lease.granted_at))
@@ -804,6 +853,10 @@ class Arbiter:
             }
             if dropped:
                 entry["dropped_bytes"] = dropped
+            if name != ALL:
+                human = self._human_input(rt, start, [name], nxt)
+                if human:
+                    entry["human_input"] = human
             per[name] = entry
         if len(per) == 1:
             name, entry = next(iter(per.items()))
@@ -840,6 +893,15 @@ class Arbiter:
         res = await self._wait_task(rt, rt.hub.expect(regex, timeout_s, start, names), lease)
         if res["matched"]:
             self.marks.setdefault(token, {})[res["channel"]] = res["cursor"]
+        human = self._human_input(
+            rt, start, [res["channel"]] if res["matched"] else names, res.get("cursor")
+        )
+        if human:
+            res["human_input"] = human
+            res["human_note"] = (
+                "A human typed on this console in the searched window; output after their "
+                "line may be the reply to it."
+            )
         res.pop("match_start", None)
         res["note"] = UNTRUSTED
         return res
@@ -856,8 +918,8 @@ class Arbiter:
         raw = data.encode()
         if newline and not raw.endswith((b"\n", b"\r")):
             raw += b"\r\n" if rt.driver.kind != "native_sim" else b"\n"
-        await rt.hub.write(raw, self._who(lease.session_id), channel)
-        return {"ok": True, "bytes": len(raw)}
+        rec = await self.console_send(rt, raw, self._sender(lease.session_id), channel)
+        return {"ok": True, "bytes": len(raw), "channel": rec.channel, "cursor": rec.cursor}
 
     # ------------------------------------------------------------------ run (tests)
     async def run(
@@ -1177,8 +1239,8 @@ class Arbiter:
         raw = data.encode()
         if newline and not raw.endswith((b"\n", b"\r")):
             raw += b"\r\n" if rt.driver.kind != "native_sim" else b"\n"
-        await rt.hub.write(raw, f"human:{by}", channel)
-        return {"ok": True}
+        rec = await self.console_send(rt, raw, Sender.human(by), channel)
+        return {"ok": True, "channel": rec.channel, "cursor": rec.cursor, "seq": rec.seq}
 
     async def human_power(
         self, board_id: str, action: str, by: str, mv: int | None = None
@@ -1235,8 +1297,12 @@ class Arbiter:
                 b["lease"]["expires_in_s"] = round(b["lease"]["expires_at"] - snap["now"])
         snap["approvals"] = [a.public() for a in self.approvals.values() if a.state == "pending"]
         snap["ops"] = [o.public() for o in sorted(self.ops.values(), key=lambda o: o.started)[-30:]]
-        known = {rt.cfg.probe_serial for rt in self.boards.values() if rt.cfg.probe_serial}
-        snap["unassigned_probes"] = [p for p in discovery.probes() if p["serial"] not in known]
+        known = [rt.cfg.probe_serial for rt in self.boards.values() if rt.cfg.probe_serial]
+        snap["unassigned_probes"] = [
+            p
+            for p in discovery.probes()
+            if not any(discovery.same_serial(p["serial"], k) for k in known)
+        ]
         snap["daemon"] = {
             "started_at": self.started_at,
             "pid": os.getpid(),

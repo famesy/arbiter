@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .client import Client
+from .client import Client, agent_kind, external_id, only_lease
 from .errors import EXIT_QUEUED, ArbiterError
 
 Command = Callable[[argparse.Namespace], int]
@@ -33,13 +33,14 @@ def _print(obj: Any, as_json: bool) -> None:
 
 def _session(c: Client, args: argparse.Namespace) -> str:
     """Use ARBITER_SESSION (set by the SessionStart hook) or register a CLI session once
-    and remember it in the state dir, keyed by the parent shell."""
+    and remember it in the state dir. The key is the agent's own session id when there is
+    one: Claude Code runs every Bash call in a new shell, so the parent pid changes."""
     if c.session:
         return c.session
     from .config import state_dir
 
     cache = state_dir() / "cli-sessions.json"
-    key = os.environ.get("ARBITER_EXTERNAL_ID") or f"ppid-{os.getppid()}"
+    key = external_id() or f"ppid-{os.getppid()}"
     try:
         known = json.loads(cache.read_text())
     except (OSError, ValueError):
@@ -47,7 +48,7 @@ def _session(c: Client, args: argparse.Namespace) -> str:
     s = c.post(
         "/api/sessions",
         {
-            "agent_kind": "cli",
+            "agent_kind": agent_kind(),
             "external_id": key,
             "label": args.label or f"cli {Path.cwd().name}",
             "cwd": str(Path.cwd()),
@@ -69,14 +70,7 @@ def _lease(c: Client, args: argparse.Namespace) -> str:
         return tok
     sid = _session(c, args)
     info = c.get(f"/api/sessions/{sid}")
-    tokens = [le["lease_token"] for le in info.get("leases", []) if "lease_token" in le]
-    if len(tokens) == 1:
-        return str(tokens[0])
-    if not tokens:
-        raise ArbiterError(
-            "LEASE_UNKNOWN", "you hold no board", hint="Run `arbiter acquire <board>` first."
-        )
-    raise ArbiterError("BAD_REQUEST", "you hold several boards; pass --lease")
+    return only_lease(info, "Run `arbiter acquire <board>`", "Run `arbiter wait {ticket}`")
 
 
 def _wait_op(c: Client, res: dict[str, Any]) -> dict[str, Any]:
@@ -160,6 +154,13 @@ def cmd_wait(args: argparse.Namespace) -> int:
 
 def cmd_release(args: argparse.Namespace) -> int:
     c = Client()
+    if not (args.lease or os.environ.get("ARBITER_LEASE")):
+        info = c.get(f"/api/sessions/{_session(c, args)}")
+        if not info.get("leases") and info.get("tickets"):
+            for t in info["tickets"]:
+                c.post("/api/cancel", {"ticket": t})
+            _print({"ok": True, "cancelled_tickets": info["tickets"]}, args.json)
+            return 0
     _print(c.post("/api/release", {"lease_token": _lease(c, args)}), args.json)
     return 0
 
@@ -212,8 +213,14 @@ def cmd_write(args: argparse.Namespace) -> int:
 
 def cmd_read(args: argparse.Namespace) -> int:
     c = Client()
-    res = c.post("/api/console/read", {"lease_token": _lease(c, args), "cursor": args.cursor})
-    sys.stdout.write(res["untrusted_device_output"])
+    res = c.post(
+        "/api/console/read",
+        {"lease_token": _lease(c, args), "cursor": args.cursor, "channel": args.channel},
+    )
+    if args.json:
+        _print(res, True)
+    else:
+        sys.stdout.write(res["untrusted_device_output"])
     return 0
 
 
@@ -380,36 +387,57 @@ def cmd_hook(args: argparse.Namespace) -> int:
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
+    from .config import load_config, load_toolchain_env
     from .drivers import discovery
+    from .procs import which
 
+    with contextlib.suppress(Exception):
+        cfg = load_config()
+        if cfg.toolchain_env:
+            load_toolchain_env(cfg.toolchain_env)  # nrfutil lives in the NCS toolchain bundle
     probes = discovery.probes()
-    try:
-        out = subprocess.run(
-            ["nrfutil", "device", "list", "--json"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            stdin=subprocess.DEVNULL,
-        ).stdout
-        nrf = {d["serial"]: d for d in discovery.parse_nrfutil_list(out)}
-    except (OSError, subprocess.SubprocessError):
-        nrf = {}
+    nrf: list[dict[str, Any]] = []
+    nrfutil = which("nrfutil")
+    if nrfutil:
+        try:
+            out = subprocess.run(
+                [nrfutil, "device", "list", "--json"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                stdin=subprocess.DEVNULL,
+            ).stdout
+            nrf = discovery.parse_nrfutil_list(out)
+        except (OSError, subprocess.SubprocessError):
+            pass
     if args.json:
-        _print({"probes": probes, "nrfutil": list(nrf.values())}, True)
+        _print({"probes": probes, "nrfutil": nrf}, True)
         return 0
     if not probes:
         print("no debug probes found")
     for i, p in enumerate(probes, 1):
-        board = (nrf.get(p["serial"]) or {}).get("board_version") or "?"
-        print(f"# {p['kind']} {p['serial']} board={board}")
+        dev = next((d for d in nrf if discovery.same_serial(d["serial"], p["serial"])), {})
+        board = dev.get("board_version")
+        platform = discovery.nordic_platform(board) or (board or "").lower() or "?"
+        print(f"# {p['kind']} {p['serial']} board={board or '?'}")
+        vcoms = {str(x["port"]): x.get("vcom") for x in dev.get("ports", [])}
         for port in p["ports"]:
-            print(f"#   {port['device']} interface={port['interface']} {port['description']}")
+            vcom = vcoms.get(port["device"])
+            where = f"vcom={vcom}" if vcom is not None else f"interface={port['interface']}"
+            print(f"#   {port['device']} {where} {port['description']}")
         driver = "nrf" if p["kind"] == "jlink" else ("stm32" if p["kind"] == "stlink" else "west")
         print(
-            f'[[board]]\nid = "board-{i}"\ndriver = "{driver}"\nplatform = "{(board or "").lower()}"\n'
-            f'probe_serial = "{p["serial"]}"\n'
+            f'[[board]]\nid = "board-{i}"\ndriver = "{driver}"\nplatform = "{platform}"\n'
+            f'probe_serial = "{p["serial"].lstrip("0") or p["serial"]}"'
         )
+        for vcom in sorted(v for v in vcoms.values() if v is not None):
+            if vcom == 0:
+                print('\n[[board.port]]\nrole = "app"\nvcom = 0')
+            else:
+                name = "tfm" if platform.startswith("nrf91") and vcom == 1 else f"vcom{vcom}"
+                print(f'\n[[board.port]]\nrole = "aux"\nname = "{name}"\nvcom = {vcom}')
+        print()
     return 0
 
 
@@ -467,6 +495,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--lease")
         if name == "read":
             sp.add_argument("--cursor", type=int)
+            sp.add_argument("--channel", help="console (default), all, rtt, uart:app, ...")
     sp = add("flash", cmd_flash, "flash a build dir to your board")
     sp.add_argument("build_dir")
     sp.add_argument("--domain")
@@ -556,7 +585,18 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _utf8_stdio() -> None:
+    # Windows consoles default to a legacy code page that can't print U+FFFD, which is what
+    # a garbage UART byte at reset decodes to.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(Exception):
+                reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_stdio()
     args = build_parser().parse_args(argv)
     try:
         return int(args.fn(args) or 0)

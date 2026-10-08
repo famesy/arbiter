@@ -195,6 +195,10 @@ class Scheduler:
         self._changed.set()
         self._changed = asyncio.Event()
 
+    def notify(self, session_id: str, kind: str, text: str, **data: Any) -> None:
+        """Put a note in a session's inbox."""
+        self._notify(session_id, kind, text, **data)
+
     def _notify(self, session_id: str, kind: str, text: str, **data: Any) -> None:
         s = self.sessions.get(session_id)
         if not s:

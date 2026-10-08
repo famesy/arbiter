@@ -19,6 +19,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from . import __version__
+from .console.hub import Sender
 from .errors import ArbiterError
 from .plugins import available as available_plugins
 from .service import Arbiter
@@ -453,12 +454,11 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
                     continue
                 try:
                     if lvl == "admin":
-                        await rt.hub.write(
-                            data, f"human:{ws.query_params.get('by') or human}", write_to
-                        )
+                        sender = Sender.human(ws.query_params.get("by") or human)
                     else:
                         lease = arb.sched.check(lease_token or "")
-                        await rt.hub.write(data, arb._who(lease.session_id), write_to)
+                        sender = arb._sender(lease.session_id)
+                    await arb.console_send(rt, data, sender, write_to)
                 except ArbiterError as e:
                     await ws.send_text(json.dumps(e.to_dict()))
         except (WebSocketDisconnect, RuntimeError):

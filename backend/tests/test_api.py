@@ -132,7 +132,7 @@ async def test_events_and_console_websockets(server):
                 msg = await asyncio.wait_for(con.recv(), 5)
                 assert isinstance(msg, bytes)
                 seen += msg
-            assert b"[human:Fame] > kernel version" in seen
+            assert b"[you] > kernel version" in seen
         async with httpx.AsyncClient(base_url=server["base"]) as c:
             await c.post(
                 "/api/admin/boards/sim-1/maintenance",

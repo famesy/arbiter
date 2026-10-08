@@ -41,7 +41,7 @@ async def test_flash_expect_and_shell(arb, build_dir):
     m = await arb.expect(s, tok, r"Uptime: (\d+) ms", 5)
     assert m["matched"]
     out = arb.console_read(s, tok)
-    assert "untrusted_device_output" in out and "[agent:" in out["untrusted_device_output"]
+    assert "untrusted_device_output" in out and "[claude-" in out["untrusted_device_output"]
 
 
 async def test_expect_timeout_returns_tail(arb):

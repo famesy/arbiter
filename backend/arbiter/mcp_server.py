@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator
@@ -21,7 +22,7 @@ except ImportError:  # mcp 1.x
 
     MCPServer = fastmcp.FastMCP  # type: ignore[attr-defined, misc, unused-ignore]
 
-from .client import AsyncClient, ensure_daemon
+from .client import AsyncClient, agent_kind, ensure_daemon, external_id, only_lease
 from .errors import ArbiterError
 
 INSTRUCTIONS = """Shared hardware boards (Zephyr dev kits) brokered by arbiter.
@@ -65,16 +66,8 @@ class Shim:
     async def register(self) -> None:
         assert self.client
         cwd = os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
-        ext = (
-            os.environ.get("CLAUDE_CODE_SESSION_ID")
-            or os.environ.get("CODEX_SESSION_ID")
-            or os.environ.get("ARBITER_EXTERNAL_ID")
-        )
-        kind = os.environ.get("ARBITER_AGENT_KIND") or (
-            "claude"
-            if os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDECODE")
-            else "codex"
-        )
+        ext = external_id()
+        kind = agent_kind(default="codex")
         repo = Path(_git(cwd, "rev-parse", "--show-toplevel") or cwd).name
         branch = _git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
         label = os.environ.get("ARBITER_LABEL") or f"{kind} {repo}" + (
@@ -146,14 +139,23 @@ class Shim:
     async def _only_lease(self) -> str:
         assert self.client
         info = await self.client.get(f"/api/sessions/{self.session}")
-        tokens = [le["lease_token"] for le in info.get("leases", []) if "lease_token" in le]
-        if len(tokens) == 1:
-            return str(tokens[0])
-        if not tokens:
-            raise ArbiterError(
-                "LEASE_UNKNOWN", "you hold no board", hint="Call acquire_board first."
-            )
-        raise ArbiterError("BAD_REQUEST", "you hold several boards; pass lease_token")
+        return only_lease(info, "Call acquire_board", "Call wait_for_board({ticket!r})")
+
+    async def release(self, lease_token: str | None) -> dict[str, Any]:
+        """Release the lease, or, when only queued, give up the place in the queue."""
+        if lease_token is None:
+            if self.client is None:
+                await self.start()
+            assert self.client
+            try:
+                info = await self.client.get(f"/api/sessions/{self.session}")
+            except ArbiterError as e:
+                return e.to_dict()
+            if not info.get("leases") and info.get("tickets"):
+                for t in info["tickets"]:
+                    await self.call("/api/cancel", {"ticket": t})
+                return {"ok": True, "cancelled_tickets": info["tickets"]}
+        return await self.call("/api/release", {"lease_token": lease_token}, need_lease=True)
 
 
 shim = Shim()
@@ -208,7 +210,7 @@ async def cancel_ticket(ticket: str) -> dict[str, Any]:
 @mcp.tool()
 async def release_board(lease_token: str | None = None) -> dict[str, Any]:
     """Release your board. Do this as soon as hardware work is done, including after failures."""
-    return await shim.call("/api/release", {"lease_token": lease_token}, need_lease=True)
+    return await shim.release(lease_token)
 
 
 @mcp.tool()
@@ -379,6 +381,9 @@ async def check_inbox() -> dict[str, Any]:
 
 
 def main() -> None:
+    # httpx logs every request at INFO, which floods the agent's MCP log with heartbeats.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     mcp.run("stdio")
 
 

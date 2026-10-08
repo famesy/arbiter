@@ -80,6 +80,25 @@ def _norm(sn: str | None) -> str:
     return (sn or "").lstrip("0").upper()
 
 
+# Nordic DK board numbers (nrfutil's boardVersion) -> Zephyr board target.
+NORDIC_BOARDS = {
+    "PCA10153": "nrf9161dk/nrf9161/ns",
+    "PCA10090": "nrf9160dk/nrf9160/ns",
+    "PCA10171": "nrf9151dk/nrf9151/ns",
+    "PCA10056": "nrf52840dk/nrf52840",
+    "PCA10040": "nrf52dk/nrf52832",
+    "PCA10095": "nrf5340dk/nrf5340/cpuapp",
+    "PCA10143": "nrf7002dk/nrf5340/cpuapp",
+    "PCA10156": "nrf54l15dk/nrf54l15/cpuapp",
+}
+
+
+def nordic_platform(board_version: str | None) -> str | None:
+    if not board_version:
+        return None
+    return NORDIC_BOARDS.get(board_version.upper().split("_")[0])
+
+
 def same_serial(a: str | None, b: str | None) -> bool:
     """USB reports 001050978819 where J-Link and nrfutil say 1050978819."""
     return bool(a) and bool(b) and _norm(a) == _norm(b)
