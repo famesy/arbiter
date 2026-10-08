@@ -215,6 +215,7 @@ def test_stale_sessions_are_dropped():
     idle_cli = s.register_session("cli", "b")
     holder = s.register_session("cli", "c")
     s.acquire(holder.id, "b1")
+
     def ended() -> list[bool]:
         return [x.ended for x in (killed, idle_cli, holder)]
 
