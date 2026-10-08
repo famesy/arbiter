@@ -19,6 +19,7 @@ Agents queue for a board, then flash, debug and run integration tests on it. A p
 | Path | What's there |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | The design doc |
+| [`docs/hw-validation-nrf9161dk.md`](docs/hw-validation-nrf9161dk.md) | What a real nRF9161 DK showed about the design's assumptions |
 | [`backend/`](backend/) | The `arbiterd` service, the `arbiter` CLI and the MCP server |
 | [`plugin/`](plugin/) | The Claude Code plugin: MCP server config, the board etiquette skill and hooks |
 | [`codex/`](codex/) | The same setup for Codex: a `config.toml` snippet and `AGENTS.md` rules |
