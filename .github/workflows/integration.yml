@@ -29,7 +29,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       contains(github.event.pull_request.labels.*.name, 'run-integration')
-    name: Integration (${{ inputs.target || 'simulated' }})
+    name: Integration
     runs-on: ${{ inputs.target == 'hardware' && fromJSON('["self-hosted", "arbiter-hw"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
