@@ -146,6 +146,9 @@ header {
   flex-wrap: wrap;
 }
 header .brand { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+.brand { display: inline-flex; align-items: center; gap: var(--s2); }
+.brand .logo { width: 24px; height: 24px; flex: none; }
+#login h1.brand .logo { width: 32px; height: 32px; }
 header .spacer { flex: 1; }
 #conn .dot { background: var(--fg); }
 #conn.down { background: var(--err-bg); color: var(--err-fg); }
@@ -260,7 +263,36 @@ main {
 #term .h { color: #fff; font-weight: 700; }
 #term .w { color: var(--term-warn); }
 #term .e { color: var(--term-err); }
-.term-input { display: flex; gap: var(--s2); margin-top: var(--s3); }
+.term-input { display: flex; gap: var(--s2); margin-top: var(--s3); position: relative; }
+.suggest {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--s1));
+  max-height: 260px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  padding: var(--s1);
+  z-index: 4;
+}
+.suggest[hidden] { display: none; }
+.suggest .opt {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) 1fr;
+  gap: var(--s3);
+  padding: 6px var(--s3);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: 13px;
+}
+.suggest .opt .n { font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-weight: 600; }
+.suggest .opt .d { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest .opt.on, .suggest .opt:hover { background: var(--hover); }
+.suggest .opt.on { box-shadow: inset 2px 0 0 var(--fg); }
+.suggest .foot { color: var(--faint); font-size: 12px; padding: 6px var(--s3) var(--s1); border-top: 1px solid var(--line); margin-top: var(--s1); }
 .term-input input { flex: 1; min-width: 0; font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: 13px; }
 .hint { font-size: 12px; color: var(--muted); margin-top: var(--s2); }
 
