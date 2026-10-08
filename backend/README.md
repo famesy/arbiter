@@ -21,6 +21,7 @@ See [docs/architecture.md](../docs/architecture.md) for the design.
 | Plugins | `arbiter.plugins` | Command overrides, command-only boards, entry-point plugins |
 | Agent API | `arbiter.mcp_server` | stdio MCP server agents launch (`arbiter mcp`) |
 | Human API | `arbiter.api` | HTTP and WebSocket API for the dashboard |
+| Dashboard | `arbiter/dashboard/` | Web page the daemon serves at `/` (plain HTML/JS, no build step) |
 | CLI | `arbiter.cli` | Agent and human commands, hooks, twister console bridge |
 
 Runs on Linux and Windows (Python 3.11+). macOS should work but isn't tested.
@@ -49,6 +50,20 @@ and the daemon, and exits 1 when something an agent needs is missing.
 `ZEPHYR_BASE` in the build's `CMakeCache.txt`, so apps outside the NCS folder flash
 fine. Set `zephyr_base` on a board (or in `[daemon]`) only for builds that don't
 record it.
+
+## Dashboard
+
+```sh
+arbiter dashboard                 # opens http://127.0.0.1:7777/?token=... in your browser
+```
+
+The daemon serves the dashboard itself, so it works offline. The link carries the admin
+token (from `admin.json` in the state dir); the page keeps it, so later visits to
+`http://127.0.0.1:7777/` work until the daemon restarts with a new token. It shows each
+board's status, holder, lease time, console source and last flash result, a live terminal
+with a tab per console channel, the queue, power, test runs and an activity feed. You can
+pause, take over, give back or revoke, reorder the queue and type into the console. Set
+`ARBITER_DASHBOARD_DIR` to serve a different copy while working on it.
 
 ## Connect an agent
 
@@ -95,7 +110,10 @@ and tell it in `AGENTS.md` to use the arbiter tools for anything that touches a 
    or `"any"` for `serial_expect`.
 4. `run(cmd=["west", "twister", ...])` runs a test command against the board. Twister gets
    a hardware map with only that board in it.
-5. `release_board()` when done. Leases expire if the agent stops heartbeating.
+5. `shell_commands()` lists the shell commands of the flashed image, read from its ELF
+   after every flash, so agents and the console know what can be typed even when the
+   firmware has help or tab completion turned off.
+6. `release_board()` when done. Leases expire if the agent stops heartbeating.
 
 Erasing, recovering a board and raising the supply voltage need your approval
 (`arbiter approve <id>` or the dashboard).
@@ -131,6 +149,12 @@ Three levels, lightest first (details in `arbiter/plugins.py`):
 
 A supply you control with a script is `[board.power] kind = "command"` with `on`,
 `off`, `set_voltage` and `measure` commands.
+
+Each board's `[board.power]` sets its limits: `mv_min` and `mv_max` bound every voltage
+change, agents need your approval to go above `default_mv`, and `ma_max` switches the supply
+off when a measurement goes over it (only you can turn it back on). A script supply's
+`set_current_limit` command gets `ma_max` at start so the supply enforces it too. The limits
+appear under `power.limits` in `arbiter status` and the API.
 
 ## Development
 

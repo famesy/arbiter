@@ -281,3 +281,54 @@ async def test_command_driver_and_plugin_driver(tmp_path, build_dir):
         assert e.value.code == "NOT_SUPPORTED"
     finally:
         await arb.stop()
+
+
+async def test_current_limit_trips_power_until_the_human_clears_it(tmp_path):
+    # The simulated radio wakeups peak near 20 mA, so a 5 mA limit trips.
+    board = sim_board(power=PowerConfig(kind="sim", ma_max=5))
+    arb = Arbiter(make_config(tmp_path, [board]))
+    await arb.start()
+    try:
+        assert arb.list_boards()[0]["power"]["limits"]["ma_max"] == 5
+        s, tok = await lease_for(arb)
+        res = await done(arb, await arb.measure_current(s, tok, 1100))
+        assert res["tripped"] and "over-current" in res["warning"]
+        p = arb.boards["sim-1"].power
+        assert p is not None and not p.on and p.state == "FAULT"
+        assert arb.snapshot()["boards"][0]["power"]["fault"].startswith("over-current")
+        with pytest.raises(ArbiterError) as e:
+            await arb.power(s, tok, "on")
+        assert e.value.code == "POWER_FAULT"
+        await arb.take("sim-1", "Fame")
+        await arb.human_power("sim-1", "on", "Fame")
+        after = p.describe()  # read afresh: the asserts above narrowed p's fields
+        assert after["on"] and after["state"] == "ON" and after["fault"] is None
+    finally:
+        await arb.stop()
+
+
+async def test_command_supply_gets_its_current_limit_at_start(tmp_path):
+    log = tmp_path / "psu.txt"
+    py = sys.executable
+    rec = [py, "-c", "import sys; open(sys.argv[1], 'a').write(sys.argv[2])", str(log)]
+    board = sim_board(
+        power=PowerConfig(
+            kind="command", ma_max=250, commands={"set_current_limit": [*rec, "ilim {ma}"]}
+        )
+    )
+    arb = Arbiter(make_config(tmp_path, [board]))
+    await arb.start()
+    try:
+        assert log.read_text() == "ilim 250"
+    finally:
+        await arb.stop()
+
+
+def test_power_limits_are_checked_when_loading_config():
+    from arbiter.config import config_from_dict
+
+    bad = {"board": [{"id": "b", "power": {"kind": "sim", "mv_max": 3300, "default_mv": 3700}}]}
+    with pytest.raises(ValueError, match="mv_min <= default_mv <= mv_max"):
+        config_from_dict(bad)
+    with pytest.raises(ValueError, match="ma_max"):
+        config_from_dict({"board": [{"id": "b", "power": {"kind": "sim", "ma_max": 0}}]})

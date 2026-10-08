@@ -13,6 +13,7 @@ from ..config import BoardConfig
 from ..console.detect import ConsoleMap
 from ..console.hub import ConsoleHub
 from ..errors import ArbiterError
+from ..zephyr_shell import ShellCommands, from_build
 
 LineFn = Callable[[str], None]
 
@@ -79,6 +80,12 @@ class BoardDriver:
 
     async def reattach_debug(self, what: list[str]) -> None:
         pass
+
+    # ---------------------------------------------------------------- shell
+    def shell_commands(self, build_dir: Path) -> ShellCommands:
+        """Shell commands the flashed image registers, for console completion.
+        Runs in a worker thread after a successful flash."""
+        return from_build(build_dir)
 
     # ---------------------------------------------------------------- tests
     def dev_id(self) -> str | None:

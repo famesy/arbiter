@@ -25,7 +25,7 @@ flags can be written as e.g. "{erase}". Literal braces are written doubled
 ("{{" and "}}"), as in Python's str.format. Available placeholders:
 
     board platform serial port build_dir domain hex elf bin erase halt
-    mv on duration_ms duration_s trace state_dir
+    mv ma on duration_ms duration_s trace state_dir
 
 A command's exit code decides success. `present` and `check_alive` commands
 signal "yes" with exit code 0. A `measure` command prints JSON on its last
@@ -56,7 +56,7 @@ DriverFactory = Callable[..., Any]  # (cfg, hub, state_dir) -> BoardDriver
 PowerFactory = Callable[..., Any]  # (cfg, driver) -> PowerDevice
 
 ACTIONS = ("flash", "reset", "reset_halt", "recover", "check_alive", "present")
-POWER_ACTIONS = ("on", "off", "set_voltage", "measure")
+POWER_ACTIONS = ("on", "off", "set_voltage", "set_current_limit", "measure")
 
 
 # ------------------------------------------------------------------ registry
@@ -258,6 +258,7 @@ def board_ctx(driver: Any, **extra: Any) -> dict[str, Any]:
         "erase": "",
         "halt": "",
         "mv": "",
+        "ma": "",
         "on": "",
         "duration_ms": "",
         "duration_s": "",
@@ -480,11 +481,16 @@ class CommandPower(PowerDevice):
     mv_min = 3000
     mv_max = 5000
     default_mv = 3700
+    ma_max = 200
     [board.power.commands]
     on = "psu-ctl --addr 192.168.1.50 output on"
     off = "psu-ctl --addr 192.168.1.50 output off"
     set_voltage = "psu-ctl --addr 192.168.1.50 volt {mv}"
+    set_current_limit = "psu-ctl --addr 192.168.1.50 ilim {ma}"
     measure = "my-meter --ms {duration_ms} --json"
+
+    `set_current_limit` runs once at start with `ma_max`, so the supply itself cuts
+    off on over-current, not only arbiter after a measurement.
     """
 
     kind = "command"
@@ -506,6 +512,10 @@ class CommandPower(PowerDevice):
             sup.add("measure")
         self.supports = frozenset(sup)
         self.log_dir: Path | None = None
+
+    async def start(self) -> None:
+        if self.cfg.ma_max and "set_current_limit" in self.cfg.commands:
+            await self._run("set_current_limit", ma=_num(self.cfg.ma_max))
 
     def _ctx(self, **kw: Any) -> dict[str, Any]:
         base = board_ctx(self.driver) if self.driver is not None else {}
@@ -596,3 +606,8 @@ class CommandPower(PowerDevice):
             m.valid, m.invalid_reason = False, "debugger or RTT was attached during the measurement"
         self.last = m
         return m
+
+
+def _num(x: float) -> str:
+    """200.0 -> "200", 0.5 -> "0.5": what a command line expects."""
+    return f"{x:g}"

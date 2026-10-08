@@ -51,13 +51,17 @@ class PowerConfig:
     kind: str = "none"  # none | sim | ppk2 | native | command | <plugin name> | module:Class
     serial: str | None = None
     port: str | None = None
+    # Limits arbiter enforces for every supply kind. Voltages outside mv_min..mv_max are
+    # refused for agents and humans alike; agents need approval to go above default_mv.
     mv_min: int = 3000
     mv_max: int = 5000
     default_mv: int = 3700
+    # Current limit in mA. A measurement that goes over it switches the supply off until a
+    # human turns it back on. Script supplies also get it at start via set_current_limit.
     ma_max: float | None = None
     allow_agent_raise_voltage: bool = False
     options: dict[str, Any] = field(default_factory=dict)  # for plugin power drivers
-    # kind = "command": templates for on, off, set_voltage and measure
+    # kind = "command": templates for on, off, set_voltage, set_current_limit and measure
     commands: dict[str, Any] = field(default_factory=dict)
 
 
@@ -129,6 +133,16 @@ def load_config(path: Path | None = None) -> Config:
     return cfg
 
 
+def _check_power_limits(board: str, p: PowerConfig) -> None:
+    if not p.mv_min <= p.default_mv <= p.mv_max:
+        raise ValueError(
+            f"board {board}: power needs mv_min <= default_mv <= mv_max, "
+            f"got {p.mv_min} <= {p.default_mv} <= {p.mv_max}"
+        )
+    if p.ma_max is not None and p.ma_max <= 0:
+        raise ValueError(f"board {board}: power ma_max must be above 0 mA, got {p.ma_max}")
+
+
 def config_from_dict(data: dict[str, Any]) -> Config:
     cfg = Config()
     d = data.get("daemon", {})
@@ -149,6 +163,7 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         bc = _mk(BoardConfig, b)
         bc.ports, bc.power = ports, power
         bc.zephyr_base = bc.zephyr_base or cfg.zephyr_base
+        _check_power_limits(bc.id, power)
         cfg.boards.append(bc)
     ids = [b.id for b in cfg.boards]
     if len(ids) != len(set(ids)):

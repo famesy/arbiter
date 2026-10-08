@@ -8,7 +8,7 @@ import os
 import socket
 from pathlib import Path
 
-from .api import Auth, create_app
+from .api import DASHBOARD_DIR, Auth, create_app
 from .config import BoardConfig, PowerConfig, load_config, write_daemon_files
 from .service import Arbiter
 
@@ -54,7 +54,7 @@ def run_daemon(config: Path | None = None, port: int | None = None, host: str | 
     agent_token, admin_token = write_daemon_files(cfg.state, cfg.host, cfg.port)
     arb = Arbiter(cfg)
     dash = os.environ.get("ARBITER_DASHBOARD_DIR")
-    app = create_app(arb, Auth(agent_token, admin_token), Path(dash) if dash else None)
+    app = create_app(arb, Auth(agent_token, admin_token), Path(dash) if dash else DASHBOARD_DIR)
 
     async def main() -> None:
         await arb.start()

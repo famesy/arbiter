@@ -183,6 +183,19 @@ async def list_boards() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def shell_commands(board: str | None = None) -> dict[str, Any]:
+    """Shell commands of the image last flashed on a board (default: the board you hold),
+    read from its ELF: names, help, argument counts and subcommands. Use it to know what
+    you can serial_write, even when the firmware has help or completion turned off."""
+    if not board:
+        lease = await shim.call("/api/lease", {}, need_lease=True)
+        if "error" in lease:
+            return lease
+        board = str(lease["board_id"])
+    return await shim.get(f"/api/boards/{board}/shell")
+
+
+@mcp.tool()
 async def acquire_board(
     selector: str, reason: str, priority_hint: str | None = None, wait_s: float = 0
 ) -> dict[str, Any]:

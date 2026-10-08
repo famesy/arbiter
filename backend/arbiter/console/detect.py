@@ -9,10 +9,11 @@ and CONFIG_UART_CONSOLE is not set; otherwise it is the UART.
 from __future__ import annotations
 
 import re
-import struct
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ..elf import elf_symbol
 
 RTT_KEYS = (
     "CONFIG_USE_SEGGER_RTT",
@@ -181,52 +182,3 @@ def detect_from_elf(elf: Path) -> ConsoleMap:
 
 
 # --------------------------------------------------------------- tiny ELF reader
-def elf_symbol(path: Path, name: str) -> int | None:
-    """Return the value of a symbol from .symtab, or None. Handles ELF32/64, LE/BE."""
-    try:
-        data = Path(path).read_bytes()
-    except OSError:
-        return None
-    if data[:4] != b"\x7fELF":
-        return None
-    is64 = data[4] == 2
-    end = "<" if data[5] == 1 else ">"
-    if is64:
-        (shoff,) = struct.unpack_from(end + "Q", data, 0x28)
-        shentsize, shnum = struct.unpack_from(end + "HH", data, 0x3A)
-    else:
-        (shoff,) = struct.unpack_from(end + "I", data, 0x20)
-        shentsize, shnum = struct.unpack_from(end + "HH", data, 0x2E)
-
-    def section(i: int) -> tuple[int, int, int, int, int]:
-        o = shoff + i * shentsize
-        if is64:
-            _n, typ, _f, _a, off, size, link, _i, _al, entsize = struct.unpack_from(
-                end + "IIQQQQIIQQ", data, o
-            )
-        else:
-            _n, typ, _f, _a, off, size, link, _i, _al, entsize = struct.unpack_from(
-                end + "IIIIIIIIII", data, o
-            )
-        return typ, off, size, link, entsize
-
-    want = name.encode()
-    for i in range(shnum):
-        typ, off, size, link, entsize = section(i)
-        if typ != 2 or not entsize:  # SHT_SYMTAB
-            continue
-        _t, stroff, _size, _l, _e = section(link)
-        for j in range(size // entsize):
-            o = off + j * entsize
-            if is64:
-                st_name, _info, _other, _shndx, value, _sz = struct.unpack_from(
-                    end + "IBBHQQ", data, o
-                )
-            else:
-                st_name, value, _sz, _info, _other, _shndx = struct.unpack_from(
-                    end + "IIIBBH", data, o
-                )
-            s = stroff + st_name
-            if data[s : s + len(want) + 1] == want + b"\x00":
-                return int(value)
-    return None

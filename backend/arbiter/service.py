@@ -27,6 +27,7 @@ from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
 from .store import EventBus, Store
+from .zephyr_shell import ShellCommands
 
 log = logging.getLogger("arbiter")
 _R = TypeVar("_R")
@@ -128,6 +129,7 @@ class BoardRuntime:
     detached_for_pause: list[str] = field(default_factory=list)
     supported: bool = True
     support_note: str = ""
+    shell: dict[str, Any] | None = None  # shell commands of the last flashed image
 
 
 class Arbiter:
@@ -175,6 +177,8 @@ class Arbiter:
         ok, why = driver.platform_support()
         power = make_power_device(bc.power, driver, self.cfg.plugin_paths)
         rt = BoardRuntime(bc, driver, hub, power, supported=ok, support_note=why)
+        if self.store:
+            rt.shell = self.store.get(f"shell:{bc.id}")
         self.boards[bc.id] = rt
         slot = self.sched.add_board(bc.id, bc.platform, bc.tags)
         if not ok:
@@ -182,7 +186,11 @@ class Arbiter:
             slot.note = why
         await driver.start()
         if rt.power:
-            await rt.power.start()
+            try:
+                await rt.power.start()
+            except Exception as e:  # a supply that can't be set up (or limited) stays off-limits
+                log.warning("power on %s failed to start: %s", bc.id, e)
+                rt.power.state, rt.power.fault = "FAULT", f"power setup failed: {e}"
 
     async def stop(self) -> None:
         if self._loop_task:
@@ -566,11 +574,9 @@ class Arbiter:
             if b.note:
                 d["note"] = b.note
             if rt.power:
+                desc = rt.power.describe()
                 d["power"] = {
-                    "kind": rt.power.kind,
-                    "on": rt.power.on,
-                    "mv": rt.power.mv,
-                    "supports": sorted(rt.power.supports),
+                    k: desc[k] for k in ("kind", "on", "mv", "supports", "state", "fault", "limits")
                 }
             out.append(d)
         return out
@@ -689,10 +695,47 @@ class Arbiter:
                     )
             if rt.driver.console_map:
                 res.setdefault("console", rt.driver.console_map.to_dict())
+            if res.get("ok"):
+                res["shell_commands"] = await self._read_shell(rt, Path(build_dir))
             rt.hub.annotate(f"[arbiter] flash {'ok' if res.get('ok') else 'FAILED'}")
             return res
 
         return await self._start_op(lease, rt, "flash", do, wait_s)
+
+    async def _read_shell(self, rt: BoardRuntime, build_dir: Path) -> int | None:
+        """Record the flashed image's shell commands for console completion. Never fails
+        the flash: an image without a shell, or one that can't be read, records why."""
+        try:
+            info = await asyncio.to_thread(rt.driver.shell_commands, build_dir)
+        except Exception as e:  # a plugin driver's own extraction
+            log.warning("shell command extraction failed on %s: %s", rt.cfg.id, e)
+            info = ShellCommands(False, f"cannot read shell commands: {e}")
+        rt.shell = {
+            "board": rt.cfg.id,
+            "build_dir": str(build_dir),
+            "updated_at": self.clock(),
+            "count": info.count(),
+            **info.to_dict(),
+        }
+        if self.store:
+            self.store.put(f"shell:{rt.cfg.id}", rt.shell)
+        self.bus.publish(
+            "board.shell",
+            {"board": rt.cfg.id, "available": info.available, "count": rt.shell["count"]},
+        )
+        return rt.shell["count"] if info.available else None
+
+    def shell_commands(self, board_id: str) -> dict[str, Any]:
+        rt = self.rt(board_id)
+        if rt.shell is None:
+            return {
+                "board": board_id,
+                "available": False,
+                "reason": "nothing has been flashed through arbiter yet",
+                "count": 0,
+                "commands": [],
+            }
+        return rt.shell
 
     def _gate(
         self, lease: sch.Lease, rt: BoardRuntime, action: str, args: dict[str, Any]
@@ -1000,17 +1043,13 @@ class Arbiter:
             self.store.save_op(op.id, op.public())
 
     # ------------------------------------------------------------------ power
-    def _power(self, rt: BoardRuntime, cap: str) -> PowerDevice:
+    def _power(self, rt: BoardRuntime, cap: str, human: bool = False) -> PowerDevice:
         if rt.power is None:
             raise ArbiterError("NOT_SUPPORTED", f"{rt.cfg.id} has no power device")
         if cap not in rt.power.supports:
             raise ArbiterError("NOT_SUPPORTED", f"{rt.power.kind} power device cannot {cap}")
-        if rt.power.state == "FAULT":
-            raise ArbiterError(
-                "OP_FAILED",
-                f"power device fault: {rt.power.fault}",
-                hint="Tell the human; the supply needs attention.",
-            )
+        if rt.power.state == "FAULT" and not human:
+            raise ArbiterError("POWER_FAULT", f"power on {rt.cfg.id} is off: {rt.power.fault}")
         return rt.power
 
     async def power(
@@ -1022,7 +1061,7 @@ class Arbiter:
     async def _do_power(
         self, rt: BoardRuntime, action: str, off_ms: int, who: str, lease: sch.Lease | None = None
     ) -> dict[str, Any]:
-        p = self._power(rt, "switch")
+        p = self._power(rt, "switch", human=lease is None)
         if action not in ("on", "off", "cycle"):
             raise ArbiterError("BAD_REQUEST", "action must be on, off or cycle")
         rt.hub.annotate(f"[arbiter] {who} power {action}")
@@ -1034,8 +1073,27 @@ class Arbiter:
             await p.set_output(True)
         else:
             await p.set_output(action == "on")
+        if action != "off":
+            p.clear_fault()  # a human turning power back on acknowledges the fault
         self.bus.publish("power.changed", {"board": rt.cfg.id, "power": p.describe()})
         return {"ok": True, "on": p.on, "mv": p.mv}
+
+    async def _check_current_limit(self, rt: BoardRuntime, max_ua: float) -> str | None:
+        """Turn the supply off when a measurement went over the board's ma_max."""
+        p, limit = rt.power, rt.cfg.power.ma_max
+        if p is None or not limit or max_ua <= limit * 1000:
+            return None
+        reason = f"over-current: {max_ua / 1000:.1f} mA measured, limit {limit:g} mA"
+        if "switch" in p.supports:
+            with contextlib.suppress(Exception):
+                await p.set_output(False)
+        p.trip(reason)
+        rt.hub.annotate(f"[arbiter] power OFF: {reason}")
+        self.bus.publish("power.tripped", {"board": rt.cfg.id, "reason": reason})
+        self.bus.publish("power.changed", {"board": rt.cfg.id, "power": p.describe()})
+        if self.store:
+            self.store.audit("power.tripped", {"board": rt.cfg.id, "reason": reason})
+        return reason
 
     async def power_set_voltage(
         self,
@@ -1117,6 +1175,10 @@ class Arbiter:
                 out["ok"] = True
                 if not res.valid:
                     out["warning"] = res.invalid_reason
+                tripped = await self._check_current_limit(rt, res.max_ua)
+                if tripped:
+                    out["tripped"] = True
+                    out["warning"] = f"{tripped}. Power is off until the human turns it back on."
                 self.bus.publish("power.measured", {"board": rt.cfg.id, "measurement": out})
                 return out
             finally:
@@ -1248,7 +1310,7 @@ class Arbiter:
         rt = self.rt(board_id)
         self._human_may_drive(board_id)
         if action == "set_voltage":
-            p = self._power(rt, "voltage")
+            p = self._power(rt, "voltage", human=True)
             lim = rt.cfg.power
             if mv is None or not (lim.mv_min <= mv <= lim.mv_max):
                 raise ArbiterError("OUT_OF_RANGE", f"voltage must be {lim.mv_min}-{lim.mv_max} mV")
@@ -1289,6 +1351,7 @@ class Arbiter:
             rt = self.boards[b["id"]]
             b.update(rt.driver.describe())
             b["supported"], b["support_note"] = rt.supported, rt.support_note or None
+            b["shell_commands"] = rt.shell["count"] if rt.shell and rt.shell["available"] else None
             b["power"] = rt.power.describe() if rt.power else None
             b["op"] = rt.op.public() if rt.op and rt.op.ended is None else None
             b["console_channels"] = {"primary": rt.hub.primary, "ends": rt.hub.ends()}

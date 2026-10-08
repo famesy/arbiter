@@ -24,6 +24,9 @@ from .errors import ArbiterError
 from .plugins import available as available_plugins
 from .service import Arbiter
 
+# The bundled web dashboard (plain HTML/CSS/JS, no build step).
+DASHBOARD_DIR = Path(__file__).parent / "dashboard"
+
 Handler = Callable[..., Awaitable[Any]]
 Endpoint = Callable[[Request], Awaitable[Response]]
 Ctx = dict[str, Any]
@@ -380,6 +383,9 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     async def plugins(ctx: Ctx, body: Body) -> Any:
         return available_plugins()
 
+    async def shell_commands(ctx: Ctx, body: Body) -> Any:
+        return arb.shell_commands(ctx["path"]["board"])
+
     # ------------------------------------------------------------ websockets
     async def ws_events(ws: WebSocket) -> None:
         lvl = auth.level(_token_from(ws))
@@ -470,13 +476,14 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     # ------------------------------------------------------------ dashboard
     async def index(req: Request) -> Response:
         if dashboard_dir and (dashboard_dir / "index.html").exists():
-            return HTMLResponse((dashboard_dir / "index.html").read_text())
+            return HTMLResponse((dashboard_dir / "index.html").read_text(encoding="utf-8"))
         return HTMLResponse(PLACEHOLDER)
 
     routes = [
         Route("/api/health", a(health), methods=["GET"]),
         Route("/api/state", a(state), methods=["GET"]),
         Route("/api/boards", a(boards), methods=["GET"]),
+        Route("/api/boards/{board}/shell", a(shell_commands), methods=["GET"]),
         Route("/api/plugins", a(plugins), methods=["GET"]),
         Route("/api/sessions", a(register), methods=["POST"]),
         Route("/api/sessions/by-external/{ext}/inbox", a(inbox_ext), methods=["GET", "POST"]),

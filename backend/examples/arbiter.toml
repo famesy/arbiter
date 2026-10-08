@@ -48,12 +48,17 @@ name = "tfm"
 vcom = 1
 
 # Optional: a Nordic PPK2 as the board's supply and current meter.
+# Power limits are per board and apply to every supply kind:
+#   mv_min, mv_max  any voltage outside this range is refused, for agents and you alike
+#   default_mv      the voltage every lease starts at; agents need your OK to go above it
+#   ma_max          over this current, arbiter switches the supply off until you turn it on
 # [board.power]
 # kind = "ppk2"
 # serial = "C4A1B2C3D4E5"
 # default_mv = 3700
 # mv_min = 3000
-# mv_max = 5000
+# mv_max = 4200
+# ma_max = 300
 
 # Optional: replace any action with your own command.
 # [board.commands]
@@ -79,6 +84,10 @@ platform = "nrf9161dk/nrf9161/ns"
 
 [board.power]
 kind = "sim"
+mv_min = 3000
+mv_max = 4200
+default_mv = 3700
+ma_max = 300
 
 # ----------------------------------------------- a board made of commands
 # Every action is your own command. Templates are argv lists or strings, never run
@@ -100,8 +109,13 @@ kind = "sim"
 # A supply you drive with your own script. `measure` prints JSON on its last line.
 # [board.power]
 # kind = "command"
+# mv_min = 1800
+# mv_max = 3600
+# default_mv = 3300
+# ma_max = 200
 # [board.power.commands]
 # on = "python psu.py on"
 # off = "python psu.py off"
 # set_voltage = "python psu.py volts {mv}"
+# set_current_limit = "python psu.py ilim {ma}"   # run once at start with ma_max
 # measure = "python psu.py measure --ms {duration_ms}"
