@@ -20,7 +20,18 @@ Agents queue for a board, then flash, debug and run integration tests on it. A p
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | The design doc |
 | [`docs/hw-validation-nrf9161dk.md`](docs/hw-validation-nrf9161dk.md) | What a real nRF9161 DK showed about the design's assumptions |
-| [`backend/`](backend/) | The `arbiterd` service (coming in its own pull request) |
+| [`backend/`](backend/) | The `arbiterd` service, the `arbiter` CLI and the MCP server |
+| [`plugin/`](plugin/) | The Claude Code plugin: MCP server config, the board etiquette skill and hooks |
+| [`codex/`](codex/) | The same setup for Codex: a `config.toml` snippet and `AGENTS.md` rules |
+
+## Use it from Claude Code
+
+```text
+/plugin marketplace add famesy/arbiter
+/plugin install arbiter@arbiter
+```
+
+The plugin needs `arbiter` on PATH (`pip install -e backend`). See [`plugin/README.md`](plugin/README.md), and [`codex/`](codex/) for Codex.
 
 ## Status
 

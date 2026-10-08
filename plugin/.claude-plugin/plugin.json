@@ -1,0 +1,11 @@
+{
+  "name": "arbiter",
+  "version": "0.1.0",
+  "description": "Queue for shared dev boards (nRF, STM32, native_sim), then flash, read the console and run hardware tests through the arbiter broker.",
+  "author": {
+    "name": "famesy"
+  },
+  "homepage": "https://github.com/famesy/arbiter",
+  "repository": "https://github.com/famesy/arbiter",
+  "keywords": ["zephyr", "hardware", "embedded", "nrf", "stm32", "hil"]
+}

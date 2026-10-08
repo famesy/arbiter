@@ -1,0 +1,35 @@
+{
+  "description": "arbiter guardrails: register the session, block direct probe and serial access, and pass on queue notices (granted, paused, revoked).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "arbiter hook session-start", "timeout": 30 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          { "type": "command", "command": "arbiter hook pre-tool-use", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell|mcp__.*arbiter.*",
+        "hooks": [
+          { "type": "command", "command": "arbiter hook post-tool-use", "timeout": 10 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "arbiter hook session-end", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
