@@ -517,14 +517,18 @@ function renderTabs(b) {
 }
 
 function renderTermHint(b) {
+  // You can type while an agent holds the board: the line goes to the console, marked as
+  // yours, and the agent keeps its lease. Take over stays the separate, explicit action.
   const agentHolds = b.state === "LEASED";
-  D.input.disabled = agentHolds || b.state === "OFFLINE";
+  D.input.disabled = b.state === "OFFLINE";
   D.send.disabled = D.input.disabled;
-  D.input.placeholder = agentHolds ? "An agent holds this board" : "Type a command, Enter to send";
+  D.input.placeholder = agentHolds ? `Type alongside ${who(b.lease.holder)}, Enter to send` : "Type a command, Enter to send";
+  const where = term.channel === "all" ? "the primary console" : term.channel;
+  const tips = shell.board === b.id && shell.data && shell.data.available
+    ? ` Tab suggests the ${shell.data.count} shell commands in the flashed image; ↑ recalls earlier lines.` : "";
   fill(D.hint, agentHolds
-    ? `${who(b.lease.holder)} holds this board. Pause it or take over to type.`
-    : `${term.channel === "all" ? "Commands go to the primary console." : `Commands go to ${term.channel}.`}${
-      shell.board === b.id && shell.data && shell.data.available ? ` Tab suggests the ${shell.data.count} shell commands in the flashed image; ↑ recalls earlier lines.` : ""}`);
+    ? `${who(b.lease.holder)} holds this board. Lines you send go to ${where}, marked as yours; the agent keeps the board.${tips}`
+    : `Commands go to ${where}.${tips}`);
 }
 
 // ------------------------------------------------------------------ shell commands
