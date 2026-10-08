@@ -17,6 +17,7 @@
 - **Queueing.** Agents never block on a long call. `acquire_board` returns a ticket straight away, or after a bounded wait of at most 45 s. A lease has a TTL and is kept alive by heartbeats. The queue is ordered by priority, then arrival. A human can reorder it, pause an agent's lease or revoke it.
 - **Stack.** Python 3.11+ asyncio (FastAPI/Starlette, the official `mcp` SDK, pyserial, psutil, SQLite). The whole Zephyr toolchain (west, twister, pyOCD, the pytest harness) is Python, so the daemon can import it directly. It runs on **Linux and Windows** as first-class platforms, and on macOS as best-effort (see [§13](#13-cross-platform-linux-windows-macos)).
 - **Power (optional).** A board can have a controllable supply: a Nordic **PPK2** (via IRNAS `ppk2-api-python`) or an external bench supply. Agents get power on/off/cycle and current measurement as tools, tied to the same lease. See [§14](#14-power-control-and-measurement).
+- **Simulated targets.** Zephyr `native_sim` is supported as a virtual board class. It needs no probe, so it has no queue: agents start as many instances as the machine can handle. On Windows it runs through WSL. See [§15](#15-simulated-targets-native_sim).
 - **Human interface.** A web dashboard served by the daemon, opened in any browser. A small tray icon handles notifications and quick pause. A CLI covers scripting. See [§10](#10-human-interface).
 - **Console.** Each board has a *console source* that is either UART or RTT. arbiter picks it automatically from the build config, the ELF, or a runtime probe; see [Console: UART vs RTT auto-detection](#7-console-uart-vs-rtt-auto-detection). Both kinds feed one terminal.
 - **Later.** The same daemon can expose MCP over Streamable HTTP so cloud or remote agents can reach a dedicated bench host. labgrid only becomes worth adopting when there is more than one host.
@@ -180,7 +181,7 @@ The CLI mirrors these tools, and its exit codes map to the same errors: 0 means 
 ### Data model
 
 ```
-Board       id ("nrf9161dk-1"), platform ("nrf9161dk/nrf9161/ns"), probe_id,
+Board       kind (hardware|sim), id ("nrf9161dk-1"), platform ("nrf9161dk/nrf9161/ns"), probe_id,
             ports [{role: app|aux, usb_serial, usb_interface, baud}], console {mode: auto|uart|rtt, resolved},
             state AVAILABLE|LEASED|PAUSED|HUMAN|MAINTENANCE|OFFLINE|NEEDS_RECOVER, tags
 Probe       id, kind (jlink-ob|jlink|stlink|cmsis-dap), usb_serial, vid:pid, runner, present
@@ -409,6 +410,7 @@ The sibling prototype in `arbiter/prototype/` explores how this feels. This doc 
 |---|---|
 | **0. Prototype** (sibling thread) | Clickable dashboard to settle the feel of the queue, pause and terminal. |
 | **1. MVP** | `arbiterd` with: the registry, the scheduler (priority, leases, pause, revoke), the UART ConsoleHub, `flash` via west, `serial_expect`, `run` with the PTY bridge, the dashboard (board cards, terminal, queue) and the tray icon, plus the `PowerDevice` interface with a simulator. The `arbiter-mcp` shim and CLI. The Claude Code plugin (MCP, skill, PreToolUse/SessionStart hooks) and the Codex config with AGENTS.md. Linux and Windows from day one. |
+| **1b. native_sim** | The `sim` board class from §15: pool with capacity, `flash` = start the build's `zephyr.exe`, console over stdio, same `run`/`serial_expect` tools. Cheap, and it gives agents a fast loop that never waits for hardware. |
 | **2. Debug + RTT + Power** | PPK2 and external-supply support (§14), the RTT reader with auto-detection, the GDB/MI tools, fault symbolisation, the recover flow, the monitor, the PostToolUse inbox hook. |
 | **3. Remote** | Turn on MCP Streamable HTTP and REST on a bench host (Pi/NUC), behind Tailscale or Cloudflare Tunnel, with per-agent bearer tokens. Add a content-addressed artifact upload and hex-based flash profiles for agents whose build dir isn't on the bench host. This is what makes Claude Code on the web or Codex cloud work. |
 | **4. Multi-host** | Split into a coordinator plus exporters, which is where labgrid's exporter/place/reservation model is worth adopting as a backend. Add power switching (uhubctl/YKUSH). |
@@ -504,6 +506,48 @@ The sibling prototype includes a simulated version so the feel can be judged fir
 
 ---
 
+## 15. Simulated targets (native_sim)
+
+Yes, arbiter can treat Zephyr `native_sim` as a board. It is the board where Zephyr runs as an ordinary program on the host (`zephyr.exe`), so agents get a fast, hardware-free loop with the same tools: build, run, read the console, run tests.
+
+### How it fits the model
+
+| Concept | Real board | `native_sim` |
+|---|---|---|
+| Registry entry | Board with a probe and serial ports | A **sim pool**: one entry with a `capacity` (default: half the CPU cores) |
+| Queue | One lease at a time per board | **No real queue.** Each `acquire_board` is granted at once, as its own instance, until the pool is full. Only then does an agent wait, using the same ticket mechanism. |
+| Lease | Exclusive access to a probe and ports | A private instance: its own working directory, its own process, its own log |
+| `flash` | Programs the chip with `west flash` | Copies the build's `zephyr/zephyr.exe` into the instance directory and **starts it**. Re-flashing restarts it. |
+| `reset` | Probe reset | Restarts the process |
+| Console | UART or RTT through the probe | The process's stdio, or its UART attached to a pseudo-terminal (`--attach_uart`) when the firmware's console is a real UART driver. arbiter picks from the build config, as in [§7](#7-console-uart-vs-rtt-auto-detection). |
+| `serial_expect` / `serial_write` / `run` | Same | Same tools, same behaviour, so test scripts don't change between sim and hardware |
+| Power tools | PPK2 or supply | Not available. The tools return a clear "this board has no power device" error. Simulated time makes current figures meaningless. |
+| Debug | gdbserver through the probe | Plain `gdb` on `zephyr.exe`, so the `gdb_*` tools work, usually faster and with fewer limits. Valgrind, sanitizers and coverage builds also work, because it is just a program. |
+| Preemption | Pause, take board, force | A human cannot need the "board", so the controls shrink to **stop** and **kill**. Pause can suspend the process (`SIGSTOP`) where the OS supports it. |
+
+Instances never touch probes, so the per-probe lock, the re-enumeration handling and the recovery ladder do not apply.
+
+### Why bother
+
+- Agents can run the same integration test first on `native_sim`, and only ask for real hardware once it passes, which leaves the physical boards free for what only hardware can check (radio, modem, timing, power).
+- The skill and `AGENTS.md` etiquette gain one rule: *"Prefer a sim board for logic tests. Acquire real hardware only when the test needs it."* A selector like `{platform: "nrf9161dk"}` can have an optional `fallback: "sim"` for tests that support both.
+- It also gives you a way to try arbiter itself, including the dashboard and agent flow, with no hardware plugged in.
+
+### Platform catch: Windows needs WSL
+
+`native_sim` builds and runs on Linux. It does not build natively on Windows, and macOS support is unreliable. So:
+
+- **Linux:** works directly, with no extra setup beyond the host toolchain (and 32-bit libraries for the default variant; the 64-bit variant `native_sim/native/64` avoids that).
+- **Windows:** arbiter runs the sim through **WSL2**. The build itself has to happen inside WSL (a Windows-built `zephyr.exe` does not exist), so the agent works on a checkout reachable from WSL. arbiter starts the process with `wsl.exe`, translates the build path, and takes the console over stdio, which crosses the boundary without any pseudo-terminal. If WSL isn't installed, sim boards show as unavailable on the dashboard with a plain explanation, and everything else keeps working.
+- **macOS:** unsupported for sim in the first release.
+- **Remote hosts later:** a Linux bench host (phase 3) is the easiest place to run sims for any client.
+
+### Phasing
+
+Sim support is small, since it reuses the `ConsoleHub`, `run` and GDB paths. It is built early (phase 1b) so every agent flow has a no-hardware path.
+
+---
+
 ## Appendix: sources the explorations relied on
 
 - Claude Code docs:
@@ -524,4 +568,6 @@ The sibling prototype includes a simulated version so the feel can be judged fir
   - the exact VCOM layout of the nRF9161 DK;
   - PPK2 details from memory of `ppk2-api-python` (modes, 0.8 to 5.0 V range, about 100 ksps, USB serial protocol); check the current library before building the driver;
   - that the nRF9161 DK's measurement connector is the right place to feed the chip (check Nordic's DK user guide);
+  - native_sim command-line options (`--attach_uart`, `--uart_stdinout`, `-rt`/`-no-rt`, `--stop_at`) and the `native_sim/native/64` variant, from memory of the Zephyr docs; check the current release;
+  - that WSL2 can run native_sim reliably with a shared build directory;
   - that twister's `serial_pty` is POSIX-only (check on the current Zephyr release before building the Windows fallback).
