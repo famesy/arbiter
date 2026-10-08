@@ -18,6 +18,7 @@
 - **Stack.** Python 3.11+ asyncio (FastAPI/Starlette, the official `mcp` SDK, pyserial, psutil, SQLite). The whole Zephyr toolchain (west, twister, pyOCD, the pytest harness) is Python, so the daemon can import it directly. It runs on **Linux and Windows** as first-class platforms, and on macOS as best-effort (see [§13](#13-cross-platform-linux-windows-macos)).
 - **Power (optional).** A board can have a controllable supply: a Nordic **PPK2** (via IRNAS `ppk2-api-python`) or an external bench supply. Agents get power on/off/cycle and current measurement as tools, tied to the same lease. See [§14](#14-power-control-and-measurement).
 - **Simulated targets.** Zephyr `native_sim` is supported as a virtual board class. It needs no probe, so it has no queue: agents start as many instances as the machine can handle. On Windows it runs through WSL. See [§15](#15-simulated-targets-native_sim).
+- **Customisable.** Three levels, from least to most work: override any action with your own command in a config file, plug in any power supply with a small script, or write a full Python driver plugin. See [§16](#16-extensibility).
 - **Human interface.** A web dashboard served by the daemon, opened in any browser. A small tray icon handles notifications and quick pause. A CLI covers scripting. See [§10](#10-human-interface).
 - **Console.** Each board has a *console source* that is either UART or RTT. arbiter picks it automatically from the build config, the ELF, or a runtime probe; see [Console: UART vs RTT auto-detection](#7-console-uart-vs-rtt-auto-detection). Both kinds feed one terminal.
 - **Later.** The same daemon can expose MCP over Streamable HTTP so cloud or remote agents can reach a dedicated bench host. labgrid only becomes worth adopting when there is more than one host.
@@ -153,11 +154,11 @@ The names match the prototype (`acquire_board`, `release_board`, `serial_expect`
 | `wait_for_board(ticket, wait_s≤45)` | Bounded long-poll that keeps the agent's place. The ticket expires if it isn't polled for about 2× the wait window, so abandoned agents drop out. |
 | `release_board(lease_token)` | Idempotent. |
 | `extend_lease(lease_token, minutes)` | Extends the lease, up to a per-board cap. |
-| `flash(lease_token, build_dir, domain?, erase?)` | Runs `west flash -d <build_dir> --dev-id <sn>` with the leased board's probe serial. Returns a summary plus a log path. |
+| `flash(lease_token, build_dir, domain?, erase?, confirm_boot?)` | Runs `west flash -d <build_dir> --dev-id <sn>` with the leased board's probe serial. Then, unless turned off, **confirms the new image is the one that boots** (see [§17](#17-lessons-from-real-hardware)). Returns a summary, whether boot was confirmed, and a log path. |
 | `reset(lease_token, halt?)` | Resets the board. |
-| `console_read(lease_token, cursor?, max_bytes)` | Reads from the ring buffer by cursor. |
-| `serial_expect(lease_token, regex, timeout_s≤45)` | The daemon matches the regex itself, so the agent doesn't burn tokens polling. Returns the match plus context. |
-| `serial_write(lease_token, data)` | Logged as `[agent:<session>]`. |
+| `console_read(lease_token, channel?, cursor?, max_bytes)` | Reads from a channel's ring buffer by cursor. `channel` is one name, a list, or `"all"` (see [§7](#several-channels-at-once)). The default is the board's primary channel. |
+| `serial_expect(lease_token, regex, channel?, timeout_s≤45)` | The daemon matches the regex itself, so the agent doesn't burn tokens polling. Returns the match, the channel it came from, and context. `channel` works as in `console_read`; `"any"` matches on whichever channel prints it first. |
+| `serial_write(lease_token, data, channel?)` | Logged as `[agent:<session>]`. Sends to the primary channel unless `channel` names another writable one (a UART, or an RTT down-channel). |
 | `run(lease_token, cmd[], cwd, timeout_s, detach?)` | Runs twister, pytest or a script with the board injected (see [§8](#8-integration-tests)). Returns a bounded summary: the last N lines, the junit verdict and the full log path. With `detach`, it returns a run ID instead. |
 | `run_status(run_id, wait_s≤45)` | Checks on a detached run. |
 | `gdb_start(lease_token, elf)` · `gdb_break` · `gdb_continue(timeout)` · `gdb_backtrace` · `gdb_eval` · `gdb_read_mem` · `gdb_stop` · `gdb_batch(cmds[])` | Non-interactive debugging through GDB/MI ([§9](#9-debugging)). |
@@ -249,7 +250,10 @@ An agent can pass `priority_hint`, but it is capped. Only a human can set priori
 
 ## 6. Board discovery and identity
 
-- **Identify a board by its probe's USB serial, never by the port name.** `/dev/ttyACM3` and `COM7` both change between reboots. pyserial's `list_ports` reports VID, PID, USB serial and interface on Linux, Windows and macOS. An nRF DK's J-Link OB exposes several VCOMs under one serial, and the interface number tells you which is which. On Linux, the stable path is `/dev/serial/by-id/usb-SEGGER_J-Link_<sn>-if00`. On Windows, arbiter matches the `SER=<sn>` in the port's hardware ID plus the interface number, and the dashboard asks you once to confirm which VCOM is the console.
+- **Normalise serial numbers before comparing them.** The same J-Link shows up as `001050978819` in USB/Windows device data (12 digits, zero-padded) and as `1050978819` in J-Link and nrfutil. arbiter strips leading zeros (equivalently, compares them as integers) everywhere.
+- **Identify a board by its probe's USB serial, never by the port name.** `/dev/ttyACM3` and `COM7` both change between reboots. pyserial's `list_ports` reports VID, PID, USB serial and interface on Linux, Windows and macOS. An nRF DK's J-Link OB exposes several VCOMs under one serial, and the interface number tells you which is which. On Linux, the stable path is `/dev/serial/by-id/usb-SEGGER_J-Link_<sn>-if00`. On Windows, both ports of a DK are named "JLink CDC UART Port", so the COM number tells you nothing. The reliable mapping is the `vcom` index that `nrfutil device list` reports (0 or 1); the USB interface number (`MI_00` is VCOM0, `MI_02` is VCOM1) gives the same answer. For Nordic DKs arbiter uses those, and for other probes the dashboard asks you once to confirm which VCOM is the console.
+- **Which VCOM is the console.** On the nRF9161 DK (and the other nRF91/nRF53 DKs), **VCOM0 is the application UART** (`uart0`, the Zephyr console) and **VCOM1 carries TF-M's secure log** (`uart1`). A console tap for non-secure code listens on VCOM0. VCOM1 is noise unless you are debugging the secure side, so it is captured to its own file and not shown in the main terminal by default. With MCUboot, the bootloader's banner also appears on VCOM0 ahead of the app's, so boot confirmation (§17) allows for it.
+- **Retry discovery.** Right after a plug-in or a driver install, the first scan can be empty or half-finished: on Fame's PC the first `nrfutil device list` found 0 devices, and one CDC interface was still `CM_PROB_NOT_CONFIGURED`. A minute later all was well. So an empty first result is never "no board": arbiter rescans for a while before it reports the board missing, and shows "starting up" in the meantime.
 - **Discovery.** arbiter merges the output of `nrfutil device list`, `STM32_Programmer_CLI -l`, `pyocd list`, `probe-rs list` and `twister --generate-hardware-map`. When a new probe appears, the dashboard asks once for a label and platform. Using the twister hardware-map schema means the inventory doubles as a twister map.
 - **Linux setup (udev).**
   - Give the arbiter user access to SEGGER (`1366:*`), ST-Link (`0483:374x`) and CMSIS-DAP devices.
@@ -277,16 +281,65 @@ Each board has a console source. The `ConsoleHub` can run a **UART reader**, an 
 
 ### Detection order, run at every flash
 
-1. **Build config (authoritative, and free).** arbiter flashes from the agent's build dir, so it reads `build/<image>/zephyr/.config` for each sysbuild image (see `domains.yaml`):
+1. **Build config (authoritative, and free).** arbiter flashes from the agent's build dir. With sysbuild, it reads `<build>/domains.yaml`, takes the `default:` image, and reads **that image's** `.config` and `zephyr.elf` (for example `<build>/hello_world/zephyr/.config`). It does **not** read `<build>/zephyr/.config`: that file exists but is the sysbuild config (`SB_CONFIG_*` only) and has no console options. Snippets such as `rtt-console` apply to **every** image, so a bootloader image like `mcuboot` also gets `CONFIG_RTT_CONSOLE=y`; reading only the default image keeps that from confusing the result. For a build without sysbuild, `<build>/zephyr/.config` is the right file.
    - RTT: `CONFIG_USE_SEGGER_RTT`, `CONFIG_RTT_CONSOLE`, `CONFIG_LOG_BACKEND_RTT`, `CONFIG_SHELL_BACKEND_RTT`.
    - UART: `CONFIG_UART_CONSOLE`, `CONFIG_LOG_BACKEND_UART`, `CONFIG_SHELL_BACKEND_SERIAL`, together with the `zephyr,console` / `zephyr,shell-uart` chosen nodes in `zephyr.dts`, which say *which* UART.
 
+   **The primary console is RTT only when RTT is on and UART is off.** On real hardware (Fame's nRF9161 DK), the `rtt-console` snippet sets `CONFIG_RTT_CONSOLE=y` but leaves `CONFIG_UART_CONSOLE=y` set as well. With both set, **the output went to the UART and the RTT buffer stayed empty**, even though the RTT control block was valid. With `CONFIG_UART_CONSOLE` switched off, the output went to RTT. So "RTT wins" is wrong, and so is "UART option present, therefore UART" in the other direction of a naive check. The rule:
+   - `CONFIG_RTT_CONSOLE=y` **and** `CONFIG_UART_CONSOLE` not set: the primary console is **RTT**.
+   - `CONFIG_UART_CONSOLE=y` (whether or not RTT is also set): the primary console is the **UART** named by `zephyr,console`.
+   - Neither set: no console; the logging and shell backends (`CONFIG_LOG_BACKEND_RTT`, `CONFIG_LOG_BACKEND_UART`, `CONFIG_SHELL_BACKEND_*`) decide what exists, and each becomes a channel but none is primary.
+
+   The RTT channel is still **recorded** when `CONFIG_USE_SEGGER_RTT` is on (it may carry logs or a shell, which are separate from the console), and the board card shows both with the primary marked. The runtime check (step 3) is the tiebreaker if the config and the board disagree: whichever channel actually produces output after a reset is marked primary, and the mismatch is shown in yellow. See [Several channels at once](#several-channels-at-once).
+
    This gives a per-image map: console → UART0, logs → RTT, and so on. The map is stored on the lease and shown on the board card.
-2. **ELF symbol (when only an ELF is given).** RTT firmware contains a `_SEGGER_RTT` symbol. Its address tells the RTT reader exactly where the control block is, which is faster and more reliable than scanning.
+2. **ELF symbol (when only an ELF is given).** RTT firmware contains a `_SEGGER_RTT` symbol (on the validated nRF9161 build it sits in `.bss`, at `0x20020410`). The match must be **exact** on the symbol name, because every nRF build also carries an absolute symbol `CONFIG_HAS_SEGGER_RTT`, and a substring match on "SEGGER_RTT" gives false positives. Its address tells the RTT reader exactly where the control block is, which is faster and more reliable than scanning.
 3. **Runtime probe (unknown firmware, or someone flashed outside arbiter).**
    - Scan RAM over J-Link for the `"SEGGER RTT"` control-block ID.
    - At the same time, listen on each VCOM for a few seconds after reset, looking for `*** Booting` or `nRF Connect SDK`.
    - Whichever produces output wins, and the result is cached until the next flash.
+
+### Several channels at once
+
+When a board has more than one live output (for example an RTT console plus the application UART, plus TF-M on the second VCOM), arbiter does not make one of them disappear. **It records all of them, always, as named channels, and the agent chooses what to look at.**
+
+**Channels** (names are stable and shown on the board card):
+
+| Channel | What it is |
+|---|---|
+| `console` | The board's **primary** channel: whatever the detection in this section resolves as the console (RTT only when `CONFIG_RTT_CONSOLE` is on and `CONFIG_UART_CONSOLE` is off, otherwise the app UART). This is what an agent sees by default. |
+| `rtt` | RTT up-buffer 0 (and further buffers as `rtt:1`, `rtt:2`) |
+| `uart:app` | The application UART (VCOM0 on a Nordic DK) |
+| `uart:tfm` | The secure-side UART (VCOM1 on the nRF91 and nRF53 DKs). Kept, but excluded from `"all"` unless asked for, because it is mostly noise. |
+| `modem-trace` | Binary modem trace, written to a file only |
+
+`console` is an alias of whichever of the others is primary, so the same name works on every board.
+
+**What the agent gets**
+- **By default:** the primary channel only, so output stays short and the agent isn't flooded with TF-M chatter or duplicates.
+- **A hint, not silence.** When another channel has produced output the agent hasn't read, the tool result ends with one short line, for example `also active: uart:app (14 new lines). Use channel="uart:app" or "all".` That way an agent that is hunting a boot problem notices the second stream without guessing it exists.
+- **Choose one, several or all.** `channel="uart:app"`, `channel=["rtt","uart:app"]`, or `"all"`, which interleaves them in time order with a short prefix per line (`[rtt]`, `[uart:app]`). `serial_expect` takes the same argument, plus `"any"` for "whichever prints it first".
+- **Each channel has its own cursor,** so reading one doesn't skip lines on another.
+- **Writing:** `serial_write` goes to the primary channel by default. An explicit `channel` picks another writable one. A channel that can't be written (a log-only RTT buffer) returns a clear error.
+- **A mistake is cheap.** All channels are stored in full in the lease's log files (one file per channel, plus a merged timeline), so an agent that looked at the wrong one can read the other afterwards.
+
+**What you get in the dashboard**
+- The terminal has a tab or toggle per channel and an **All** view. The primary one is selected, the others show a small yellow dot when they have unread output.
+- You choose which channels the *agent* sees by default per board (for example "also include `uart:app`"), without touching the agent.
+
+**Configuration** (`arbiter.toml`, see [§16](#16-extensibility)):
+```toml
+[boards.nrf9161dk-1.console]
+primary = "auto"                 # or "rtt" / "uart:app"
+default_for_agents = ["console"] # what agents read when they pass no channel
+exclude_from_all = ["uart:tfm"]
+```
+
+**Cases this covers**
+- *RTT console + UART logs:* agent reads RTT by default, sees the hint about the UART, and can ask for `all` when it needs the full picture.
+- *UART console + TF-M on the second VCOM:* agent reads the app UART. TF-M is recorded, and available as `uart:tfm`.
+- *RTT on a power measurement:* RTT detaches ([§14](#14-power-control-and-measurement)), the channel is shown as paused, and the UART channel carries on.
+- *Simulated board:* a single channel, `console`.
 
 ### RTT reader
 
@@ -410,6 +463,7 @@ The sibling prototype in `arbiter/prototype/` explores how this feels. This doc 
 |---|---|
 | **0. Prototype** (sibling thread) | Clickable dashboard to settle the feel of the queue, pause and terminal. |
 | **1. MVP** | `arbiterd` with: the registry, the scheduler (priority, leases, pause, revoke), the UART ConsoleHub, `flash` via west, `serial_expect`, `run` with the PTY bridge, the dashboard (board cards, terminal, queue) and the tray icon, plus the `PowerDevice` interface with a simulator. The `arbiter-mcp` shim and CLI. The Claude Code plugin (MCP, skill, PreToolUse/SessionStart hooks) and the Codex config with AGENTS.md. Linux and Windows from day one. |
+| **1a. Extensibility core** | Config file with per-board action overrides, the power-script contract, and `arbiter doctor`. Built before the built-in drivers, which are then just the default implementations of the same interfaces. |
 | **1b. native_sim** | The `sim` board class from §15: pool with capacity, `flash` = start the build's `zephyr.exe`, console over stdio, same `run`/`serial_expect` tools. Cheap, and it gives agents a fast loop that never waits for hardware. |
 | **2. Debug + RTT + Power** | PPK2 and external-supply support (§14), the RTT reader with auto-detection, the GDB/MI tools, fault symbolisation, the recover flow, the monitor, the PostToolUse inbox hook. |
 | **3. Remote** | Turn on MCP Streamable HTTP and REST on a bench host (Pi/NUC), behind Tailscale or Cloudflare Tunnel, with per-agent bearer tokens. Add a content-addressed artifact upload and hex-based flash profiles for agents whose build dir isn't on the bench host. This is what makes Claude Code on the web or Codex cloud work. |
@@ -438,7 +492,7 @@ Linux and Windows are first-class platforms. macOS is best-effort: it should mos
 | Probe tools | J-Link, nrfutil, OpenOCD, pyOCD, probe-rs, CubeProgrammer | Same (all ship for Windows) | Same | Tool paths are found on `PATH` or in config. Every argv is built as a list, never a shell string, so quoting rules don't differ. |
 | Twister serial bridge (`serial_pty`) | PTY works | No PTY; twister's `serial_pty` is POSIX-only | PTY works | Windows fallback: for a `run`, arbiter hands the real COM port to twister for the duration and pauses its own reader. Afterwards it imports twister's `handler.log` into the console history. The dashboard shows "port lent to twister" during the run. An optional com0com virtual port pair restores the live view. |
 | Hooks in the plugin | Shell | PowerShell / cmd | Shell | Hooks call the `arbiter hook <event>` executable, never bash scripts, so the same `hooks.json` works on every OS. |
-| Paths | POSIX | `C:\...`, spaces common | POSIX | `pathlib` everywhere. Build dirs are passed as given. |
+| Paths | POSIX | `C:\...`, spaces common, long paths | POSIX | `pathlib` everywhere. Build dirs are passed as given, but checked first: some builds break on long paths (TF-M rejects build directories over about 90 characters), so `flash` and `doctor` warn early and suggest a short build root such as `C:\b\`. See [§17](#17-lessons-from-real-hardware). |
 | Install | `uv tool install arbiter` | Same, or a PyInstaller `.exe` | Same | Zephyr developers already have Python. A single-file build is offered for machines without it. |
 
 The Python choice holds up. Go would give a single static binary, but arbiter would still shell out to the same Python tools (west, twister, pyOCD), and importing west's runner code and twister's hardware map directly matters more.
@@ -548,6 +602,192 @@ Sim support is small, since it reuses the `ConsoleHub`, `run` and GDB paths. It 
 
 ---
 
+## 16. Extensibility
+
+You should be able to bend arbiter to your setup without forking it. There are three levels. Each is optional, and each builds on the one before.
+
+| Level | You write | Use it when |
+|---|---|---|
+| **1. Command overrides** | A line in the config file | Your flash or reset procedure is a command you already have |
+| **2. Power script** | A small script in any language | You have a supply or relay arbiter doesn't know |
+| **3. Python plugin** | A package with an entry point | You need a new kind of board, discovery, console or measurement, or live status and streaming |
+
+The built-in drivers (west flash, PPK2, native_sim and so on) are implemented against the same interfaces, so nothing is privileged.
+
+### Level 1: command overrides in the config file
+
+One TOML file, `arbiter.toml`, in the user config folder (`~/.config/arbiter/` on Linux, `%APPDATA%\arbiter\` on Windows). Defaults live at the top, and any board can override any action.
+
+```toml
+[defaults.actions]
+flash = ["west", "flash", "-d", "{build_dir}", "--dev-id", "{probe_id}"]
+
+[boards.nrf9161dk-1]
+platform = "nrf9161dk/nrf9161/ns"
+probe_id = "960123456"
+
+[boards.nrf9161dk-1.actions]
+flash  = ["./tools/flash-with-modem.py", "{build_dir}", "{probe_id}"]   # my own script
+reset  = ["nrfutil", "device", "reset", "--serial-number", "{probe_id}"]
+recover = ["./tools/recover-and-reprovision.sh", "{probe_id}"]
+timeout = { flash = 180, recover = 300 }
+
+[boards.nrf9161dk-1.actions.custom.modem_factory_reset]            # extra action
+run = ["./tools/modem-reset.sh", "{probe_id}"]
+description = "Reset the modem to factory settings"
+```
+
+**Actions you can override:** `flash`, `reset`, `erase`, `recover`, `power_on`, `power_off`, `console_open`, and `health_check` (how arbiter decides a board is alive).
+
+**The contract**
+- The command is a **list**, run directly with no shell, so quoting is the same on Linux and Windows. A string form with `shell = true` is available when you really need pipes.
+- **Variables** are replaced from a fixed set: `{board_id}`, `{probe_id}`, `{build_dir}`, `{artifact}`, `{port}`, `{lease_id}`, `{log_dir}`, `{workdir}`. An unknown variable is a config error, found at startup. Anything an agent types is never substituted into a command; agents pass only a build directory and flags that arbiter validates.
+- **Environment:** `ARBITER_BOARD`, `ARBITER_PROBE_ID`, `ARBITER_LEASE`, `ARBITER_LOG_DIR`, and the same names as the variables above.
+- **Exit code:** 0 means success. 75 means "busy, try again" (arbiter retries once). Anything else is a failure. stdout and stderr go to the operation log.
+- **Optional result:** if the last stdout line is a JSON object, arbiter parses it and passes it back to the agent (for example `{"summary": "flashed app + modem fw, 14 s"}`).
+- **Limits:** every action has a timeout (the default is per action), is started in its own process group or Job Object, and has stdin closed. A command that hangs is killed, and the board goes through the normal recovery ladder.
+- Custom actions appear to agents as a single extra tool, `board_action(lease_token, name)`, and in `list_boards` with their descriptions. An agent cannot run anything that isn't declared.
+
+### Level 2: power supply scripts
+
+For a supply or relay arbiter doesn't ship a driver for, point the board at an executable:
+
+```toml
+[boards.nrf9161dk-1.power]
+script = "./tools/xyz-supply.py"
+args   = ["--port", "COM5"]
+limits = { mv_min = 1800, mv_max = 3600, ma_max = 500 }
+```
+
+arbiter calls the script with a **verb**, and the script answers with an exit code and JSON on stdout:
+
+| Call | Meaning | Output |
+|---|---|---|
+| `script [args] capabilities` | What does this device support? | `{"on_off": true, "voltage": true, "measure": false}` |
+| `script [args] on` / `off` | Switch the output | exit 0 |
+| `script [args] cycle --off-ms 500` | Optional. If missing, arbiter does `off`, waits, `on`. | exit 0 |
+| `script [args] set-voltage 3300` | Millivolts | exit 0 |
+| `script [args] status` | Current state | `{"state": "on", "mv": 3300, "ma": 12.4}` |
+| `script [args] measure --duration-ms 5000` | Optional | `{"avg_ua": 3.2, "max_ua": 410, "charge_uc": 16000, "trace": "<file>"}` |
+
+- Exit codes: 0 success, 2 unsupported verb (arbiter then hides that control), anything else is a fault, shown in red with the script's stderr.
+- The daemon checks `limits` **before** calling the script, so a script bug or a bad agent request can't exceed the configured voltage or current range.
+- For a supply that needs a long-lived connection or streams measurements, the script may be started once in `serve` mode, speaking one JSON object per line over stdin and stdout with the same verbs. That is optional, and one-shot scripts are always enough.
+- Anything not listed behaves as in [§14](#14-power-control-and-measurement).
+
+### Level 3: Python plugins
+
+A plugin is a normal Python package that registers itself under an **entry point group**:
+
+```toml
+# the plugin's pyproject.toml
+[project.entry-points."arbiter.drivers"]
+my_supply = "my_pkg.supply:MySupplyDriver"
+```
+
+**Driver kinds** (each is a small abstract class in `arbiter.plugin`):
+
+| Kind | What it adds |
+|---|---|
+| `BoardDriver` | A new flash, reset or debug method (for example a vendor tool arbiter has no knowledge of) |
+| `PowerDriver` | A power device with live status and streaming measurement |
+| `ConsoleSource` | A new way to read the console (RTT variants, a network port, a logic-analyser decode) |
+| `Discovery` | Finding boards and probes automatically |
+| `Hook` | Reacting to events (lease granted, flash done, fault seen), for example a notification |
+
+**Discovery.** At startup the daemon lists the `arbiter.drivers` entry points with `importlib.metadata`, loads those that pass the checks below, and also loads drop-in single files from a `plugins/` folder next to the config. A plugin is used only if it is enabled in the config (`[plugins] allow = [...]`), so installing a package never changes behaviour on its own.
+
+**Validation** happens at load time, before any board uses a plugin:
+1. **API version.** The plugin declares the arbiter plugin API it targets. An incompatible plugin is skipped, with a plain message in the dashboard.
+2. **Capabilities.** The driver declares what it can do, and arbiter checks that each declared capability maps to a method that exists. Controls for capabilities it doesn't have never appear.
+3. **Config schema.** The driver publishes a schema for its settings. The config file is checked against it, and a wrong key or type is reported with the line number.
+4. **Conformance check.** `arbiter plugins check` runs a standard test against the driver with a simulated lease (power on and off, flash a dummy, read a fixed output) and prints a pass or fail per capability. Plugin authors run it in their own CI.
+5. **Isolation.** A plugin that raises, hangs or crashes is disabled and its boards show a yellow state with the reason; the daemon and other boards keep running. Drivers may be run in a **separate worker process** (`isolation = "process"`) so that a crash or a blocking vendor library cannot stall the daemon. Level 1 and 2 commands are always separate processes.
+
+**Packaging note.** The single-file PyInstaller build cannot load third-party plugins. Use the normal `uv tool install arbiter` for Level 3.
+
+### Trust and safety
+
+- Everything here runs **as you**, with your permissions, because it is your hardware and your scripts. arbiter does not sandbox it.
+- The config file and plugin folder are in the user profile. There is **no agent tool that edits them**, and the plugin's PreToolUse hook denies agent edits to those paths. As with all hooks, this stops a cooperative agent, and it does not stop a determined one, so keep the folder owned by you.
+- Variables are fixed and agent text is never put into commands; custom actions are named, not free-form.
+- Each custom command is shown on the board card with a small "custom" badge, and its runs are in the audit log with the exact argument list.
+
+### Developer experience
+
+- `arbiter doctor` checks the config: unknown variables, missing executables, scripts that don't answer `capabilities`, plugin API mismatches. It prints one line per problem with the fix.
+- `arbiter action test <board> <action>` runs a single action by hand with a dummy build, and shows its output and exit code.
+- `arbiter plugins list` / `check` for Level 3.
+- The dashboard shows each board's effective setup: which actions are built in, which are overridden, and which driver handles power.
+- The repo ships three small examples: a flash wrapper script, a power script for a made-up supply (in Python and in shell), and a minimal plugin package.
+
+---
+
+## 17. Lessons from real hardware
+
+These came from running the first steps on Fame's nRF9161 DK, and they change what arbiter must do.
+
+### 1. Console detection: UART_CONSOLE decides, and RTT is recorded either way
+
+Covered in [§7](#7-console-uart-vs-rtt-auto-detection). The `rtt-console` snippet turns RTT on without turning UART off, so both appear in `.config`. This was first read as "RTT wins", and the hardware test disproved it: with both options set, output went to the UART and the RTT buffer stayed empty; only with `CONFIG_UART_CONSOLE` off did output reach RTT. The correct rule is that RTT is the primary console only when `CONFIG_RTT_CONSOLE=y` and `CONFIG_UART_CONSOLE` is not set. The RTT channel is still recorded whenever RTT is present.
+
+### 2. "Flashed and verified" does not mean "the new app is running"
+
+On `nrf9161dk/nrf9161/ns` **without a bootloader**, `west flash` writes the application but leaves the region `0x0` to `0x10000` untouched. That region holds the secure image (TF-M / SPM). If an older image is sitting there, it keeps booting and may start something else, or the old app. The flash tool reports success, and the readback verifies what it wrote, but what runs may not be what you built.
+
+So arbiter does not treat the flash tool's exit code as proof. After every `flash`, with `confirm_boot` on (the default), it does this:
+1. Resets the board and reads the console for a boot banner, within a timeout.
+2. Compares what it sees with what the build should print. Where it can, it uses a **build marker**: arbiter reads the build's version information (for example the app name and the `zephyr_version` / build timestamp from the build output, or a string from the app's `prj.conf` such as `CONFIG_BOOT_BANNER`) and expects it on the console. If the firmware prints nothing identifiable, arbiter only confirms that *something* booted and says so plainly.
+3. Returns one of three results: `boot_confirmed`, `boot_unconfirmed` (booted, but no way to match the build), or `boot_mismatch` (console shows a different image, such as an older app). `boot_mismatch` is shown in **yellow** on the dashboard, with the sentence "The board is running different firmware than you flashed. Flash the secure image too, or erase first."
+4. For this board class, a first flash also warns: "No bootloader: the secure region (0x0 to 0x10000) is not updated by this flash." A per-board option, `erase = "full"`, makes the first flash of a new lease erase everything so stale images can't survive. It is off by default because erasing is slower and wears flash.
+
+Agents are told in the tool result, not only on the dashboard, so they don't report a pass for a test that ran against old firmware.
+
+### 3. TF-M and long build paths
+
+TF-M refuses to build in directories whose path is longer than about 90 characters. On Windows, where checkouts are often deep (`C:\Users\...\ncs\v3.x\...`), this matters. arbiter itself doesn't build, but it flashes from the agent's build directory and reports problems with it, so it:
+- warns in `arbiter doctor` and in the `flash` result when the build path is over the limit, with the suggested fix (a short build root like `C:\b\<project>`, or `west build -d <short path>`);
+- recommends the short build root in the skill's etiquette text for Windows;
+- keeps its own paths short (leases, logs and temp files live in short directories under the user profile) so it never adds to the problem.
+
+### 4. Find the SEGGER and Nordic tools explicitly
+
+On Fame's Windows PC, nothing from nRF Connect SDK is on the system `PATH`. `west`, `nrfutil`, `cmake` and the compiler work only after loading the toolchain bundle's environment (the bundle's `environment.json` sets PATH, PYTHONPATH, `NRFUTIL_HOME` and the Zephyr toolchain variables), and the SEGGER folder is not on `PATH` either. Worse, the `jlink` that *is* on `PATH` is Java's `jlink.exe` from Android Studio. So arbiter never runs a bare `jlink`, `JLinkExe` or `nrfutil`:
+
+- **Resolution order, per tool:** an explicit path in `arbiter.toml` ([§16](#16-extensibility)), then the NCS toolchain bundle, then the SEGGER install folders, and `PATH` last. Candidates are probed (`--version` and a sanity check of the output) so Java's `jlink` is rejected.
+- **Environment.** For `west` and `nrfutil` runs, arbiter loads the bundle's environment (from its `environment.json`) into the child process, so it works without the agent or the user starting a special shell.
+- **Names differ by OS.** On Windows the J-Link command-line tool is `JLink.exe` (and the GDB server `JLinkGDBServerCL.exe`), on Linux `JLinkExe` and `JLinkGDBServer`.
+- `arbiter doctor` prints what it resolved for each tool, with its version, and flags anything that looks wrong. On the validated setup that is NCS v3.4.1 (west 1.5.0, nrfutil 8.1.1 with `device` 2.20.0) and SEGGER J-Link V9.82.
+
+### Validated on the nRF9161 DK
+
+A separate validation run on the DK (report: `/mnt/project-files/arbiter-hw-validation-nrf9161dk.md`) confirmed these, on Windows 11 with sysbuild builds of `hello_world`:
+
+| Result | Status |
+|---|---|
+| The `rtt-console` snippet leaves `CONFIG_UART_CONSOLE=y`, so the config is ambiguous | Confirmed. **With both set, output goes to UART and RTT stays empty; RTT is primary only when UART_CONSOLE is off** (see the correction in §7 and item 1 above) |
+| Read the default sysbuild image, not `<build>/zephyr/` | Confirmed |
+| Exact `_SEGGER_RTT` match | Confirmed |
+| UART + MCUboot flashes via `west flash --dev-id` and boots, with the banner on VCOM0 | Confirmed (about 15 s to flash) |
+| RTT can be read live from the board over J-Link without halting | Confirmed with the older firmware on the board |
+| An RTT-only build (`-S rtt-console` with `UART_CONSOLE` off) prints over RTT up[0] and not on the app UART | Confirmed on hardware. With both options set, the output stayed on the UART and RTT was empty. |
+| RTT RAM survives a soft reset | Confirmed: after a reset the reader saw the previous run's text before the new banner |
+
+### 5. RTT keeps the previous run's text across a reset
+
+The RTT buffer lives in RAM, and a reset does not clear it. After a reset or a flash, the buffer can still contain **the previous run's output**, including a valid-looking boot banner. If arbiter read it as fresh, boot confirmation ([item 2](#2-flashed-and-verified-does-not-mean-the-new-app-is-running)) would pass on old text. So for the RTT channel:
+- **Before** a flash or reset, arbiter records the buffer's write position (the control block's `WrOff`) and the current buffer contents as a baseline.
+- **After** the reset, only data written beyond the new start is treated as new. Text that was already there is kept in the log but marked `[stale: before reset]`, shown greyed in the dashboard, and never counted by `serial_expect` or boot confirmation.
+- If the firmware re-initialises the control block (the usual case on boot), arbiter notices the changed control block (new buffer addresses, offsets back at zero) and reads from the start of the new run.
+- Where arbiter can, it clears the RTT up-buffer's write and read offsets right before the reset, so the new run starts clean.
+- Boot confirmation on an RTT-primary board therefore needs the banner to appear **after** the reset marker. The same marker is used on UART channels: output that arrives before the reset is separated from output after it.
+
+### Effect on the plan
+
+These items go into phase 1: the console rule (RTT primary only when UART_CONSOLE is off) applied to the default sysbuild image, stale-RTT handling after reset, serial-number normalisation and probe-discovery retry, explicit tool resolution, the boot confirmation after `flash`, and the path-length check. The simulated board always returns `boot_confirmed` after start.
+
+---
+
 ## Appendix: sources the explorations relied on
 
 - Claude Code docs:
@@ -570,4 +810,5 @@ Sim support is small, since it reuses the `ConsoleHub`, `run` and GDB paths. It 
   - that the nRF9161 DK's measurement connector is the right place to feed the chip (check Nordic's DK user guide);
   - native_sim command-line options (`--attach_uart`, `--uart_stdinout`, `-rt`/`-no-rt`, `--stop_at`) and the `native_sim/native/64` variant, from memory of the Zephyr docs; check the current release;
   - that WSL2 can run native_sim reliably with a shared build directory;
+  - that Python entry points (`importlib.metadata`) are the right discovery mechanism on Windows installs made with `uv tool` or PyInstaller (a single-file build cannot load third-party plugins);
   - that twister's `serial_pty` is POSIX-only (check on the current Zephyr release before building the Windows fallback).

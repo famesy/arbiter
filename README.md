@@ -19,6 +19,7 @@ Agents queue for a board, then flash, debug and run integration tests on it. A p
 | Path | What's there |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | The design doc |
+| [`docs/hw-validation-nrf9161dk.md`](docs/hw-validation-nrf9161dk.md) | What a real nRF9161 DK showed about the design's assumptions |
 | [`backend/`](backend/) | The `arbiterd` service (coming in its own pull request) |
 
 ## Status
