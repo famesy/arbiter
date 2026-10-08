@@ -76,6 +76,9 @@ class BoardConfig:
     allow_agent_erase: bool = False
     max_lease_min: float | None = None
     runner: str | None = None  # west runner override (jlink, nrfutil, openocd, ...)
+    # Zephyr tree west uses for this board, when the build doesn't record one
+    # (it normally does, in CMakeCache.txt). Defaults to [daemon] zephyr_base.
+    zephyr_base: str | None = None
     flash_args: list[str] = field(default_factory=list)
     tools: dict[str, str] = field(default_factory=dict)  # tool name -> path override
     # Driver-specific options (sim, native_sim, plugins)
@@ -96,6 +99,8 @@ class Config:
     plugin_paths: list[str] = field(default_factory=list)
     # NCS toolchain bundle environment.json, loaded before running tools
     toolchain_env: str | None = None
+    # Default Zephyr tree for west boards whose builds don't name one
+    zephyr_base: str | None = None
     path: Path | None = None
 
     @property
@@ -132,6 +137,7 @@ def config_from_dict(data: dict[str, Any]) -> Config:
     cfg.human_name = d.get("human_name", cfg.human_name)
     cfg.plugin_paths = [str(Path(p).expanduser()) for p in d.get("plugin_paths", [])]
     cfg.toolchain_env = d.get("toolchain_env")
+    cfg.zephyr_base = d.get("zephyr_base")
     if "state_dir" in d:
         cfg.state = Path(d["state_dir"]).expanduser()
     if "timing" in data:
@@ -142,6 +148,7 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         power = _mk(PowerConfig, b.pop("power", {})) if "power" in b else PowerConfig()
         bc = _mk(BoardConfig, b)
         bc.ports, bc.power = ports, power
+        bc.zephyr_base = bc.zephyr_base or cfg.zephyr_base
         cfg.boards.append(bc)
     ids = [b.id for b in cfg.boards]
     if len(ids) != len(set(ids)):
