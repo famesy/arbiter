@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend tooling
+node_modules/
+
+# arbiter runtime state
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+logs/
+
+# Zephyr / west builds
+build*/
+twister-out*/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
