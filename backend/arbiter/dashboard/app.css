@@ -632,12 +632,12 @@ input.switch:checked::after { background: var(--card); }
 .probe-chip { width: 100%; border-style: dashed; border-radius: var(--r); background: transparent; font-weight: 400; }
 #sessions { display: flex; flex-direction: column; gap: 2px; }
 #sessions .empty { padding: var(--s1) 0; font-size: 13px; }
-.agent { display: flex; align-items: center; gap: var(--s2); font-size: 13px; padding: 4px 2px; min-width: 0; }
-.agent .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; }
-.agent .dot.on { background: var(--rose); }
-.agent .dot.warn { background: var(--warn-line); }
-.agent .who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.agent .what { margin-left: auto; color: var(--muted); white-space: nowrap; font-size: 12px; }
+#sessions .agent { display: flex; align-items: center; gap: var(--s2); font-size: 13px; padding: 4px 2px; min-width: 0; }
+#sessions .agent .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; }
+#sessions .agent .dot.on { background: var(--rose); }
+#sessions .agent .dot.warn { background: var(--warn-line); }
+#sessions .agent .who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#sessions .agent .what { margin-left: auto; color: var(--muted); white-space: nowrap; font-size: 12px; }
 
 #detail { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
 .boardbar { border: var(--edge) solid var(--ink); border-radius: var(--r-lg); padding: var(--s3) var(--s4) var(--s3) var(--s5); background: var(--card); }
@@ -740,7 +740,7 @@ button.link:hover:not(:disabled) { background: none; color: var(--fg); }
   #boards { flex-direction: row; overflow-x: auto; padding: 4px 4px 6px; margin: -4px; }
   #boards .board { flex: 0 0 auto; min-width: 190px; max-width: 240px; }
   #sessions { flex-direction: row; flex-wrap: wrap; gap: 2px var(--s4); }
-  .agent .what { margin-left: var(--s1); }
+  #sessions .agent .what { margin-left: var(--s1); }
   #term { height: 58vh; min-height: 280px; }
 }
 @media (max-width: 600px) {
