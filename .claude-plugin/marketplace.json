@@ -10,6 +10,7 @@
     {
       "name": "arbiter",
       "source": "./plugin",
+      "license": "Apache-2.0",
       "description": "Queue for shared dev boards, then flash, read the console and run hardware tests through arbiter."
     }
   ]

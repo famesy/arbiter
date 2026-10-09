@@ -4,7 +4,7 @@
   "private": true,
   "description": "arbiter dashboard components (plain DOM, no framework) with Storybook stories",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "exports": {
     ".": "./index.js",
     "./style.css": "./style.css"

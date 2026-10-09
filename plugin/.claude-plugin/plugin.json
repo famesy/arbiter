@@ -7,5 +7,6 @@
   },
   "homepage": "https://github.com/famesy/arbiter",
   "repository": "https://github.com/famesy/arbiter",
+  "license": "Apache-2.0",
   "keywords": ["zephyr", "hardware", "embedded", "nrf", "stm32", "hil"]
 }

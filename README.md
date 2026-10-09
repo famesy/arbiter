@@ -116,7 +116,7 @@ Every recording below is the real arbiter daemon and dashboard, driven by real `
 
 ### Or stay in your terminal
 
-Most embedded work happens in a terminal, so arbiter is getting a terminal UI too: `arbiter tui` puts the board console front and centre, with one status line on top and an F-key bar (it works with the mouse) for boards, channels, queue, take over, pause and view options. It is in review in [#28](https://github.com/famesy/arbiter/pull/28).
+Most embedded work happens in a terminal, so arbiter has a terminal UI too: `arbiter tui` (install with `pip install -e "backend[tui]"`) puts the board console front and centre, with one status line on top and an F-key bar (it works with the mouse) for boards, channels, queue, take over, pause and view options.
 
 <p align="center">
   <img src="docs/media/tui.svg" alt="arbiter tui: the nRF9161 DK console filling the terminal, Claude's test output and the human's kernel uptime command tagged, with Tab completion offering device, and an F-key bar at the bottom" width="900">
@@ -262,3 +262,9 @@ Tool settings live at the repo root: `ruff.toml`, `mypy.ini`, `.pre-commit-confi
 Integration tests (`@pytest.mark.integration`) never run by default. Start them from **Actions > Integration > Run workflow**, choosing `simulated` or `hardware` (a self-hosted runner labelled `arbiter-hw` with the boards attached), or add the `run-integration` label to a pull request.
 
 The GIFs in [`docs/media/`](docs/media/) are recorded from the real dashboard with Playwright and Chromium, driving `arbiter` agent sessions against simulated boards.
+
+## License
+
+arbiter is licensed under the [Apache License 2.0](LICENSE).
+
+Optional PPK2 power control uses IRNAS [`ppk2-api`](https://github.com/IRNAS/ppk2-api-python), which is GPL-2.0. arbiter does not ship it: it is imported only when a board's power kind is `ppk2`, and you install it yourself (`pip install ppk2-api`). Check that its license suits you before redistributing the two together.
