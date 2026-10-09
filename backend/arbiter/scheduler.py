@@ -268,6 +268,13 @@ class Scheduler:
         b.note = note
         self.emit("board.state", board=board_id, state=b.state, note=note)
 
+    def set_note(self, board_id: str, note: str | None) -> None:
+        """A note shown with the board (dashboard, status, the next holder), state unchanged."""
+        b = self.board(board_id)
+        if b.note != note:
+            b.note = note
+            self.emit("board.state", board=board_id, state=b.state, note=note)
+
     def clear_needs_recover(self, board_id: str) -> None:
         b = self.board(board_id)
         b.note = None

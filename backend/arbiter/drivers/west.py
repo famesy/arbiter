@@ -196,6 +196,7 @@ class WestDriver(BoardDriver):
 class NrfDriver(WestDriver):
     kind = "nrf"
     capabilities = frozenset({"flash", "reset", "recover", "console", "rtt", "run"})
+    default_runner = "nrfutil"  # what `west flash` uses for these boards in NCS v3
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
         super().__init__(cfg, hub, state_dir)
