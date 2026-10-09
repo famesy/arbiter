@@ -32,3 +32,20 @@ The dev boards on this machine are shared with other agents and a human. The
   `ARBITER_DEV_ID` and `ARBITER_HW_MAP` set. From a shell:
   `arbiter run --board nrf9161dk -- <command>` acquires, runs and releases.
   CLI exit codes: 0 OK, 75 queued, 76 paused, 77 revoked.
+
+### Setting arbiter up
+
+If `arbiter` is missing, has no config or finds no boards, set it up with the human:
+
+1. `arbiter --help`. If it is missing, ask before installing:
+   `pipx install "git+https://github.com/famesy/arbiter#subdirectory=backend"`.
+2. `arbiter init` prints a draft config from the connected probes and writes nothing. Show
+   the draft to the human; only after they say yes, run `arbiter init --write`. If a
+   config already exists, only the human can replace it (`arbiter init --write --force`
+   in their own terminal; agents are blocked from `--force`).
+3. `arbiter doctor` and fix each `FAIL` with the human, then `arbiter status`.
+4. Tell the human to open the dashboard with `arbiter dashboard` in their own terminal.
+   Don't run it yourself: it prints their admin token.
+
+Never write or edit arbiter's `config.toml` yourself; only `arbiter init --write` writes it,
+after the human approves the draft.

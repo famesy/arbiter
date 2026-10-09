@@ -1,10 +1,14 @@
 {
-  "description": "arbiter guardrails: register the session, block direct probe and serial access, and pass on queue notices (granted, paused, revoked).",
+  "description": "arbiter guardrails: start the daemon and register the session, block direct probe and serial access, and pass on queue notices (granted, paused, revoked). Each hook does nothing if arbiter isn't installed yet.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "arbiter hook session-start", "timeout": 30 }
+          {
+            "type": "command",
+            "command": "if command -v arbiter >/dev/null 2>&1; then arbiter hook session-start; else echo '{\"systemMessage\": \"arbiter is not installed yet. Run /arbiter:setup to set it up.\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"The arbiter command is not installed, so the shared dev boards are not available yet. If the user wants to use a board, use the arbiter setup skill.\"}}'; fi",
+            "timeout": 30
+          }
         ]
       }
     ],
@@ -12,7 +16,11 @@
       {
         "matcher": "Bash|PowerShell",
         "hooks": [
-          { "type": "command", "command": "arbiter hook pre-tool-use", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "command -v arbiter >/dev/null 2>&1 || exit 0; arbiter hook pre-tool-use",
+            "timeout": 10
+          }
         ]
       }
     ],
@@ -20,14 +28,22 @@
       {
         "matcher": "Bash|PowerShell|mcp__.*arbiter.*",
         "hooks": [
-          { "type": "command", "command": "arbiter hook post-tool-use", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "command -v arbiter >/dev/null 2>&1 || exit 0; arbiter hook post-tool-use",
+            "timeout": 10
+          }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "arbiter hook session-end", "timeout": 10 }
+          {
+            "type": "command",
+            "command": "command -v arbiter >/dev/null 2>&1 || exit 0; arbiter hook session-end",
+            "timeout": 10
+          }
         ]
       }
     ]
