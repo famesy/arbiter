@@ -14,6 +14,7 @@ from ..config import BoardConfig
 from ..console.detect import ConsoleMap
 from ..console.hub import ConsoleHub
 from ..errors import ArbiterError
+from ..procs import ProcResult
 from ..zephyr_shell import ShellCommands, from_build
 
 LineFn = Callable[[str], None]
@@ -74,6 +75,10 @@ class BoardDriver:
     async def modem_trace(self, on: bool) -> None:
         """Start or stop feeding the modem's trace output into the "modem-trace" channel."""
         raise ArbiterError("NOT_SUPPORTED", f"{self.kind} boards have no modem trace output")
+
+    async def smp(self, args: list[str], *, log_path: Path, timeout_s: float = 60) -> ProcResult:
+        """Run one `mcumgr` command against the board (e.g. ["image", "list"])."""
+        raise ArbiterError("NOT_SUPPORTED", f"{self.kind} boards have no MCUmgr support")
 
     async def debugserver(
         self, build_dir: Path, port: int, log_path: Path

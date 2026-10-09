@@ -178,6 +178,27 @@ def cmd_flash(args: argparse.Namespace) -> int:
     return 0 if res.get("status") == "done" else 1
 
 
+def cmd_dfu(args: argparse.Namespace) -> int:
+    c = Client()
+    if args.status:
+        _print(c.post("/api/dfu/status", {"lease_token": _lease(c, args)}), True)
+        return 0
+    if not args.build_dir:
+        print("usage: arbiter dfu BUILD_DIR [--no-confirm] | arbiter dfu --status", file=sys.stderr)
+        return 2
+    res = c.post(
+        "/api/dfu",
+        {
+            "lease_token": _lease(c, args),
+            "build_dir": str(Path(args.build_dir).resolve()),
+            "confirm": not args.no_confirm,
+        },
+    )
+    res = _wait_op(c, res)
+    _print(res, args.json)
+    return 0 if res.get("status") == "done" and res.get("ok") else 1
+
+
 def cmd_reset(args: argparse.Namespace) -> int:
     c = Client()
     _print(c.post("/api/reset", {"lease_token": _lease(c, args), "halt": args.halt}), args.json)
@@ -807,6 +828,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("build_dir")
     sp.add_argument("--domain")
     sp.add_argument("--erase", action="store_true")
+    sp.add_argument("--lease")
+    sp = add("dfu", cmd_dfu, "update your board over MCUmgr (upload, test, reset, confirm)")
+    sp.add_argument("build_dir", nargs="?")
+    sp.add_argument("--no-confirm", action="store_true", help="leave the new image in test mode")
+    sp.add_argument("--status", action="store_true", help="show the image slots")
     sp.add_argument("--lease")
     sp = add("reset", cmd_reset, "reset your board")
     sp.add_argument("--halt", action="store_true")

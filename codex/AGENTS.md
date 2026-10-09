@@ -34,6 +34,7 @@ The dev boards on this machine are shared with other agents and a human. The
 - nRF91: `at(cmd=...)` sends an AT command through the app, `lte_status()`
   summarises the LTE connection, `modem_trace(action="start"|"stop")`
   captures a modem trace.
+- `dfu(build_dir)` updates over MCUmgr (upload, test, reset, confirm); `dfu_status()` lists slots.
 - `thread_health()` shows each thread's peak stack use and warns near overflow.
 - If the board hangs, call `inspect_hung()`; to debug, use `gdb_batch`,
   `gdb_continue` and `gdb_stop` (never `west debug`).
