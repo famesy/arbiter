@@ -43,8 +43,8 @@ Plug in the boards first. Then run, without `--write`:
 arbiter init
 ```
 
-It detects the connected probes (J-Link, ST-Link, ...) and prints a draft config and the
-path it would write to. It writes nothing.
+It detects the connected probes (J-Link, ST-Link, ...) and nRF Connect SDK, and prints a
+draft config and the path it would write to. It writes nothing.
 
 Show the human the draft: which boards it found, their probe serials, platforms, console
 ports, and any power device. Ask whether it looks right. Only after they say yes:
@@ -53,8 +53,9 @@ ports, and any power device. Ask whether it looks right. Only after they say yes
 arbiter init --write
 ```
 
-If a config already exists, `init --write` refuses. Ask the human whether to replace it
-before adding `--force`. If no probe is found, say so: with no config arbiter still starts
+If a config already exists, `init --write` refuses. Replacing it is the human's call and
+only they can do it: `--force` is blocked for agents. If they want the new draft, ask them
+to run `arbiter init --write --force` in their own terminal (the old file is kept as `.bak`). If no probe is found, say so: with no config arbiter still starts
 with a simulated board, and a `native_sim` board works on Linux and in WSL.
 
 ## 3. Check it
@@ -70,7 +71,8 @@ Each line is `OK`, `WARN` or `FAIL` with a reason: the config, the tools (`west`
 
 ## 4. Start it and hand over
 
-The daemon starts on its own when a session starts or the first arbiter tool is used.
+The daemon starts on its own in the background when a session starts or the first arbiter
+tool is used. Don't run `arbiter daemon` yourself: it runs in the foreground and never exits.
 Check it with:
 
 ```sh
