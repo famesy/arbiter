@@ -25,35 +25,42 @@
   <header>
     <span class="brand"><svg class="logo" viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><rect x="22" y="22" width="20" height="20" rx="4.5"/><circle cx="32" cy="11.5" r="6"/><circle cx="52.78" cy="20.00" r="4.8"/><circle cx="52.78" cy="44.00" r="4.0"/><circle cx="32.00" cy="56.00" r="3.3"/><circle cx="11.22" cy="44.00" r="2.7"/><circle cx="11.22" cy="20.00" r="2.2"/></svg>arbiter</span>
     <span id="conn" class="pill"><span class="dot"></span><span id="conn-text">connecting</span></span>
-    <span id="summary" class="muted"></span>
     <span class="spacer"></span>
     <nav class="tabs" id="nav"><a href="#" data-page="dash">Dashboard</a><a href="#settings" data-page="settings">Settings</a></nav>
-    <button id="pause-all" title="Pause every agent that holds a board">Pause all agents</button>
+    <details class="menu" id="more">
+      <summary aria-label="More" title="More">&#8943;</summary>
+      <div class="menu-body">
+        <button id="pause-all" title="Pause every agent that holds a board">Pause all agents</button>
+        <button id="open-guide">Getting started guide</button>
+      </div>
+    </details>
   </header>
   <div class="wrap" id="dash">
-    <div id="stats" class="stats-row"></div>
     <div id="alerts"></div>
-    <main>
-      <div class="col">
-        <div class="card">
-          <h2>Boards <span id="boards-count" class="count"></span></h2>
-          <div id="boards"></div>
-          <div id="probes"></div>
-        </div>
-        <div class="card">
-          <h2>Agents <span id="agents-count" class="count"></span></h2>
-          <div id="sessions" class="scroll-x"></div>
-        </div>
-      </div>
-      <div id="detail" class="col"></div>
+    <main class="desk">
+      <aside class="rail">
+        <h2>Boards</h2>
+        <div id="boards"></div>
+        <div id="probes"></div>
+        <h2>Agents</h2>
+        <div id="sessions"></div>
+      </aside>
+      <section id="detail"></section>
     </main>
-    <div class="card" style="margin-top: var(--s5)">
-      <h2>Activity <label class="check"><input type="checkbox" id="feed-filter"> Selected board only</label></h2>
-      <div id="feed"></div>
-    </div>
   </div>
   <div class="wrap" id="settings" hidden></div>
 </div>
+<div id="stash" hidden>
+  <div id="activity">
+    <label class="check"><input type="checkbox" id="feed-filter"> Selected board only</label>
+    <div id="feed"></div>
+  </div>
+</div>
+<dialog id="sheet" aria-labelledby="sheet-title">
+  <div class="sheet-head"><h2 id="sheet-title"></h2><button class="icon" id="sheet-close" aria-label="Close">&times;</button></div>
+  <div id="sheet-body"></div>
+</dialog>
+<dialog id="guide" aria-labelledby="guide-title"></dialog>
 <div id="toasts"></div>
 <script src="/static/app.js"></script>
 </body>
