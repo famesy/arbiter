@@ -162,6 +162,14 @@ instead: flash a working image, then `arbiter release`. Exit codes: `0` OK, `75`
   diff and the commits and files in your repo). `history()` lists recent
   flashes and runs on each board.
 
+## Stacks and threads
+
+- Odd resets, corrupted variables or a fault in a thread you didn't expect?
+  Check `thread_health()`: it lists each thread's peak stack use and warns
+  at 80 % with the Kconfig option to raise. Needs the kernel shell with
+  `CONFIG_THREAD_STACK_INFO=y` and `CONFIG_INIT_STACKS=y`, or
+  `CONFIG_THREAD_ANALYZER=y`.
+
 ## nRF91 modem
 
 - `at(cmd="AT+CEREG?")` sends one AT command through your app (needs

@@ -455,6 +455,16 @@ async def last_good(
 
 
 @mcp.tool()
+async def thread_health(warn_pct: int = 80, lease_token: str | None = None) -> dict[str, Any]:
+    """Every thread's peak stack use (size, used, %), priority and state, from the kernel shell
+    (`kernel thread list`) or the thread analyzer's report, with warnings for threads at or above
+    warn_pct and the Kconfig option to raise. The board keeps running."""
+    return await shim.call(
+        "/api/threads", {"lease_token": lease_token, "warn_pct": warn_pct}, need_lease=True
+    )
+
+
+@mcp.tool()
 async def inspect_hung(
     build_dir: str | None = None, lease_token: str | None = None
 ) -> dict[str, Any]:
