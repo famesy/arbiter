@@ -277,6 +277,7 @@ function render() {
   const leased = state.boards.filter((b) => b.state === "LEASED").length;
   const waiting = (state.queue || []).length;
   fill($("#summary"), `${plural(state.boards.length, "board")} · ${leased} in use · ${waiting} waiting`);
+  renderStats(leased, waiting);
   $("#pause-all").disabled = leased === 0;
   fill($("#boards-count"), String(state.boards.length));
 
@@ -296,6 +297,20 @@ function render() {
   if (page === "settings") renderSettings();
 }
 
+function renderStats(leased, waiting) {
+  const bad = state.boards.filter((b) => boardStatus(b).level === "err").length;
+  const agents = (state.sessions || []).filter((s) => !s.ended).length;
+  const pend = (state.approvals || []).length;
+  const tiles = [
+    ["Boards", state.boards.length, bad ? "err" : "pink", bad ? `${bad} need${bad === 1 ? "s" : ""} attention` : `${state.boards.length - leased} free`],
+    ["In use", leased, "sage", leased ? state.boards.filter((b) => b.lease).map((b) => who(b.lease.holder)).join(", ") : "no agent holds a board"],
+    ["Waiting", waiting, "peach", waiting ? `oldest ${dur(Math.max(...state.queue.map((e) => e.waiting_s || 0)))}` : "queue is empty"],
+    ["Agents", agents, pend ? "warn" : "lilac", pend ? `${plural(pend, "request")} for you` : "connected"],
+  ];
+  renderIf($("#stats"), JSON.stringify(tiles), () => tiles.map(([k, v, cls, note]) =>
+    h("div", { class: `tile ${cls}` }, h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)), h("div", { class: "note" }, note))));
+}
+
 function kv(rows) {
   return h("div", { class: "kv" }, rows.filter(Boolean).map(([k, v, cls]) =>
     [h("span", { class: "k" }, k), h("span", { class: `v ${cls || ""}` }, v)]));
@@ -308,7 +323,7 @@ function boardCard(b) {
   const left = leaseLeft(b);
   const level = st.level || (fr && fr.level === "err" ? "err" : "");
   return h("div", {
-    class: `board ${b.id === selected ? "sel" : ""} ${level}`,
+    class: `board st-${b.state.toLowerCase()} ${b.id === selected ? "sel" : ""} ${level}`,
     tabindex: "0",
     role: "button",
     onclick: () => select(b.id),
@@ -1128,7 +1143,7 @@ function setConn(up) {
 // (GET /api/admin/config, /api/admin/doctor), and says so where a value isn't exposed yet.
 const PREFS_KEY = "arbiter.prefs";
 const prefs = (() => {
-  const p = { theme: "system", notify: true, feedOnly: false };
+  const p = { notify: true, feedOnly: false };
   try { Object.assign(p, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); } catch (e) { /* no storage */ }
   return p;
 })();
@@ -1140,9 +1155,6 @@ function setPref(k, v) {
 }
 
 function applyPrefs() {
-  const root = document.documentElement;
-  if (prefs.theme === "light" || prefs.theme === "dark") root.dataset.theme = prefs.theme;
-  else delete root.dataset.theme;
   $("#feed-filter").checked = !!prefs.feedOnly;
   if (state) renderFeed();
 }
@@ -1686,13 +1698,9 @@ function toggle(label, on, set, hint) {
 }
 
 function prefsPanel() {
-  const themes = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
   const perm = "Notification" in window ? Notification.permission : "unsupported";
   return h("div", { class: "prefs" },
-    h("div", { class: "toggle-row" },
-      h("span", {}, h("span", { class: "label" }, "Theme")),
-      h("div", { class: "tabs" }, themes.map(([k, label]) => h("button", { class: prefs.theme === k ? "on" : "", onclick: () => setPref("theme", k) }, label)))),
-    h("h3", {}, "Terminal"),
+    h("h3", { style: "margin-top: 0" }, "Terminal"),
     VIEW_OPTS.map(([k, label]) => toggle(label, view[k], (on) => setView(k, on),
       { fold: "Shows bootloader and banner output as one line you can open.", ts: "Zephyr log times like [00:00:01.234,567].", prompt: "Prompts like uart:~$ and rtt:~$." }[k])),
     h("h3", {}, "Activity and alerts"),
@@ -1706,7 +1714,7 @@ function prefsPanel() {
       h("button", { class: "small", onclick: () => {
         for (const [k, , d] of VIEW_OPTS) view[k] = d;
         try { localStorage.removeItem(VIEW_KEY); localStorage.removeItem(PREFS_KEY); } catch (e) { /* no storage */ }
-        Object.assign(prefs, { theme: "system", notify: true, feedOnly: false });
+        Object.assign(prefs, { notify: true, feedOnly: false });
         applyView(); applyPrefs(); renderSettings();
       } }, "Reset to defaults")));
 }
