@@ -29,7 +29,8 @@ function fill(el, ...kids) {
 // Re-render only when the data changed, and never while the user is typing in it.
 function renderIf(el, key, fn) {
   if (el.dataset.key === key) return;
-  if (el.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
+  const f = document.activeElement;
+  if (el.contains(f) && f.tagName === "INPUT" && f.type !== "checkbox") return;
   el.dataset.key = key;
   fill(el, fn());
 }
@@ -291,6 +292,7 @@ function render() {
   renderSessions();
   renderDetail();
   renderFeed();
+  if (page === "settings") renderSettings();
 }
 
 function kv(rows) {
@@ -380,6 +382,7 @@ function renderDetail() {
     D.controls = h("div", { class: "controls btn-row" });
     D.tabs = h("div", { class: "tabs", role: "tablist" });
     D.term = h("pre", { id: "term", tabindex: "0" });
+    applyView();
     D.input = h("input", {
       placeholder: "Type a command, Enter to send",
       autocomplete: "off",
@@ -401,7 +404,7 @@ function renderDetail() {
     fill(root,
       h("div", { class: "card" }, D.head, D.controls),
       h("div", { class: "card" },
-        h("div", { class: "term-bar" }, h("h2", { style: "margin:0" }, "Terminal"), D.tabs),
+        h("div", { class: "term-bar" }, h("h2", { style: "margin:0" }, "Terminal"), h("div", { class: "btn-row" }, D.tabs, viewMenu())),
         D.term, form, D.help, D.hint),
       h("div", { class: "card" }, h("h2", {}, "Queue ", D.queueCount), D.queue),
       D.power,
@@ -508,6 +511,7 @@ function renderTabs(b) {
   const names = new Set(["all", ...((b.console && b.console.sources) || []), ...Object.keys((b.console_channels && b.console_channels.ends) || {})]);
   const prim = b.console_channels && b.console_channels.primary;
   const list = [...names];
+  term.names = names;
   renderIf(D.tabs, JSON.stringify([list, term.channel, prim]), () => list.map((n) => h("button", {
     class: n === term.channel ? "on" : "",
     role: "tab",
@@ -795,6 +799,8 @@ const term = {
   dim: false,
   colour: "",
   lines: 0,
+  boot: null, // the boot block that the next boot line joins
+  names: new Set(), // channel names, to spot the "[uart:app] " prefix on the All tab
 
   open(board, channel) {
     this.close();
@@ -807,6 +813,7 @@ const term = {
     this.dim = false;
     this.colour = "";
     this.lines = 0;
+    this.boot = null;
     const dec = new TextDecoder();
     const ws = new WebSocket(wsUrl(`/api/boards/${encodeURIComponent(board)}/console?channel=${encodeURIComponent(channel)}&scrollback=65536`));
     ws.binaryType = "arraybuffer";
@@ -843,10 +850,10 @@ const term = {
     this.pending = parts.pop();
     const frag = document.createDocumentFragment();
     if (this.partial) { this.partial.remove(); this.partial = null; }
-    for (const line of parts) { frag.append(this.lineEl(line)); this.lines++; }
+    for (const line of parts) { this.add(frag, this.lineEl(line)); this.lines++; }
     if (this.pending) { this.partial = this.lineEl(this.pending, true); frag.append(this.partial); }
     el.append(frag);
-    while (this.lines > 5000 && el.firstChild) { el.firstChild.remove(); this.lines--; }
+    while (this.lines > 5000 && el.firstChild) { this.lines -= Number(el.firstChild.dataset.n || 1); el.firstChild.remove(); }
     if (stick) el.scrollTop = el.scrollHeight;
   },
 
@@ -874,11 +881,15 @@ const term = {
     let text = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
     let cls = "";
     let tag = null;
-    // Lines sent to the board: "[you] > cmd" (the human) or "[claude-1a2b] > cmd" (an agent).
-    const sent = /^\[(you|[\w.]+-[0-9a-f]{4})\] > /.exec(text);
+    // Lines sent to the board arrive as dim notes: "[you] > cmd" and "[claude-1a2b] > cmd"
+    // (older daemons: "[human:Fame] > cmd" and "[agent:claude-1] > cmd").
+    const old = /^\[(human|agent):([^\]]*)\] > /.exec(text);
+    const tagged = !old && (shown.dim || start.dim) ? /^\[([^\]\s]+)\] > /.exec(text) : null;
+    const sent = old || (tagged && [tagged[0], tagged[1] === "you" ? "human" : "agent", tagged[1]]);
     if (sent) {
-      const mine = sent[1] === "you";
-      tag = h("span", { class: `who ${mine ? "you" : "agent"}` }, `[${sent[1]}]`);
+      const me = state && state.daemon && state.daemon.human;
+      const mine = sent[1] === "human" && (sent[2] === "you" || !me || sent[2] === me);
+      tag = h("span", { class: `who ${mine ? "you" : "agent"}` }, mine ? "[you]" : `[${sent[2]}]`);
       text = text.slice(sent[0].length - 2); // keep "> cmd"
       cls = mine ? "h" : "a";
     } else if (shown.dim || start.dim) {
@@ -888,10 +899,111 @@ const term = {
     if (/<err>|\bASSERTION FAIL|\bFATAL\b|Kernel panic|\bFAIL(ED)?\b/.test(text)) cls = "e";
     else if (/<wrn>|\bWARN(ING)?\b/.test(text)) cls = "w";
     else if (!sent && shown.colour) cls = shown.colour;
-    return h("div", { class: cls }, tag, text || "​");
+    let src = null;
+    let ts = null;
+    let prompt = null;
+    if (!sent) {
+      const c = /^\[([^\]\s]+)\] /.exec(text);
+      if (c && this.names.has(c[1]) && c[1] !== "all") { src = h("span", { class: "src" }, c[0]); text = text.slice(c[0].length); }
+      // Zephyr log timestamps ("[00:00:01.234,567] " or "[00012345] ") and shell prompts
+      // ("uart:~$ ") get their own spans so the view menu can hide them.
+      const t = /^\[(\d{2}:\d{2}:\d{2}\.\d{3}(,\d{3})?|\d{8})\] /.exec(text);
+      if (t) { ts = h("span", { class: "ts" }, t[0]); text = text.slice(t[0].length); }
+      const p = /^[\w.-]+:~\$ ?/.exec(text);
+      if (p) {
+        prompt = h("span", { class: "pr" }, p[0]);
+        text = text.slice(p[0].length);
+        if (!text.trim()) cls += " po"; // a bare prompt line
+      }
+    }
+    const boot = !partial && !sent ? bootLine(text, !!this.boot) : null;
+    // The bootloaders mark their own errors and warnings.
+    if (boot && /^(E: |\[ERR\])/.test(text)) cls = "e";
+    else if (boot && /^(W: |\[WRN\])/.test(text) && cls !== "e") cls = "w";
+    const div = h("div", { class: cls.trim() }, tag, src, ts, prompt, text || (src || ts || prompt ? "" : "​"));
+    div.boot = boot;
+    return div;
+  },
+
+  // Boot output (NSIB, MCUboot, TF-M, the Zephyr banner) is gathered into one block that
+  // the view menu shows folded as "Booted <title>". The lines themselves are unchanged.
+  add(frag, div) {
+    const b = div.boot;
+    if (!b) { this.boot = null; frag.append(div); return; }
+    if (!this.boot) {
+      const sum = h("div", { class: "sum", onclick: () => blk.classList.toggle("open") });
+      const body = h("div", { class: "body" });
+      const blk = h("div", { class: "boot" }, sum, body);
+      blk.dataset.n = "0";
+      this.boot = { blk, sum, body, title: "", lines: 0, level: "" };
+      frag.append(blk);
+    }
+    const g = this.boot;
+    g.body.append(div);
+    g.lines++;
+    g.blk.dataset.n = String(g.lines);
+    if (b.title) g.title = b.title;
+    if (div.classList.contains("e")) g.level = "e";
+    else if (div.classList.contains("w") && !g.level) g.level = "w";
+    g.sum.className = `sum ${g.level}`;
+    const issues = g.level === "e" ? ", has errors" : g.level === "w" ? ", has warnings" : "";
+    g.sum.textContent = `${g.title ? `Booted ${g.title}` : "Booting"} (${g.lines} line${g.lines === 1 ? "" : "s"}${issues})`;
   },
 
 };
+
+// Is this a line of boot output? Returns {title} (title may be "") or null. `inBoot` says a
+// boot block is already open, which lets the bootloaders' short log prefixes join it.
+function bootLine(text, inBoot) {
+  const t = text.trim();
+  let m = /^\*\*\* Booting (.+?) \*\*\*$/.exec(t);
+  if (m) return { title: m[1].replace(/^Zephyr OS build /, "Zephyr OS ") };
+  if (/^\*\*\* (Using|Booting) .*\*\*\*$/.test(t)) return { title: "" };
+  m = /^Booting TF-M (v\S+)/.exec(t);
+  if (m) return { title: `TF-M ${m[1]}` };
+  if (/Starting bootloader|^Attempting to boot|^\[Sec Thread\]|^\[INF\] .*TF-M/.test(t)) return { title: "" };
+  if (inBoot && (!t || /^[IWED]: /.test(t) || /^\[(INF|WRN|ERR|DBG)\]/.test(t) ||
+      /^(Verifying signature|Hash: 0x|Firmware (signature verified|version)|Booting \(0x|TF-M |Non-Secure system starting)/.test(t))) {
+    return { title: "" };
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------ terminal view
+// Display-only options, kept per browser. The console log itself is never changed.
+const VIEW_KEY = "arbiter.termView";
+const VIEW_OPTS = [
+  ["fold", "Fold boot output", true],
+  ["ts", "Show log timestamps", false],
+  ["prompt", "Show shell prompts", false],
+];
+const view = (() => {
+  const v = Object.fromEntries(VIEW_OPTS.map(([k, , d]) => [k, d]));
+  try { Object.assign(v, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* no storage */ }
+  return v;
+})();
+
+function applyView() {
+  for (const el of document.querySelectorAll("input[data-view]")) el.checked = !!view[el.dataset.view];
+  if (!D.term) return;
+  D.term.classList.toggle("fold", !!view.fold);
+  D.term.classList.toggle("no-ts", !view.ts);
+  D.term.classList.toggle("no-prompt", !view.prompt);
+}
+
+function setView(k, on) {
+  view[k] = on;
+  try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) { /* no storage */ }
+  applyView();
+}
+
+function viewMenu() {
+  const menu = h("details", { class: "menu" },
+    h("summary", {}, "View"),
+    h("div", { class: "menu-body" }, VIEW_OPTS.map(([k, label]) => h("label", {},
+      h("input", { type: "checkbox", "data-view": k, checked: !!view[k], onchange: (ev) => setView(k, ev.target.checked) }), label))));
+  return menu;
+}
 
 // ------------------------------------------------------------------ activity feed
 // lease.op duplicates op.started/op.finished; approval.requested arrives again as a notify.
@@ -932,6 +1044,10 @@ function describe(ev) {
     case "power.measured": return [`${d.board} measured avg ${ua(d.measurement.avg_ua)}, peak ${ua(d.measurement.peak_ua)}${d.measurement.valid === false ? " (not valid)" : ""}`, d.measurement.valid === false ? "warn" : ""];
     case "approval.requested": return [`${d.who ? who(d.who) : sess(d.approval.session)} asks to ${d.approval.action.replace(/_/g, " ")} ${d.approval.board}`, "warn"];
     case "approval.changed": return [`${d.approval.action.replace(/_/g, " ")} on ${d.approval.board}: ${d.approval.state}${d.approval.decided_by ? ` by ${who(d.approval.decided_by)}` : ""}`];
+    case "console.write": {
+      const who_ = d.sender && d.sender.kind === "human" ? (d.sender.name || "You") : (d.sender && (d.sender.name || d.sender.tag)) || "an agent";
+      return [`${who_} sent “${String(d.data || "").trim()}” to ${d.board}${d.channel ? ` (${d.channel})` : ""}`];
+    }
     case "notify": return [String(d.text).replace(/^(agent|human):/, ""), "warn"];
     default: return [`${d.kind} ${d.board || ""}`];
   }
@@ -999,6 +1115,233 @@ function setConn(up) {
   $("#conn-text").textContent = up ? "Live" : "Reconnecting to arbiterd";
 }
 
+// ------------------------------------------------------------------ settings
+// Dashboard preferences live in this browser. The daemon's own settings come from
+// config.toml; the page shows them read-only until arbiterd can edit it
+// (GET /api/admin/config, /api/admin/doctor), and says so where a value isn't exposed yet.
+const PREFS_KEY = "arbiter.prefs";
+const prefs = (() => {
+  const p = { theme: "system", notify: true, feedOnly: false };
+  try { Object.assign(p, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); } catch (e) { /* no storage */ }
+  return p;
+})();
+
+function setPref(k, v) {
+  prefs[k] = v;
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* no storage */ }
+  applyPrefs();
+}
+
+function applyPrefs() {
+  const root = document.documentElement;
+  if (prefs.theme === "light" || prefs.theme === "dark") root.dataset.theme = prefs.theme;
+  else delete root.dataset.theme;
+  $("#feed-filter").checked = !!prefs.feedOnly;
+  if (state) renderFeed();
+}
+
+let page = "dash";
+function showPage() {
+  page = location.hash === "#settings" ? "settings" : "dash";
+  $("#dash").hidden = page !== "dash";
+  $("#settings").hidden = page !== "settings";
+  for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("on", a.dataset.page === page);
+  if (page === "settings") { loadSettings(); renderSettings(); }
+  window.scrollTo(0, 0);
+}
+
+// What the daemon told us; `null` while loading, `false` when this daemon has no such route.
+const daemonCfg = { config: null, doctor: null, plugins: null, doctorBusy: false };
+
+async function loadSettings() {
+  const get = async (path) => {
+    try { return await api("GET", path); } catch (e) { return e.status === 404 || e.status === 405 ? false : { error: e.message }; }
+  };
+  const [config, plugins] = await Promise.all([get("/api/admin/config"), get("/api/plugins")]);
+  Object.assign(daemonCfg, { config, plugins });
+  renderSettings();
+  if (daemonCfg.doctor === null) runDoctor();
+}
+
+async function runDoctor() {
+  daemonCfg.doctorBusy = true;
+  renderSettings();
+  try { daemonCfg.doctor = await api("GET", "/api/admin/doctor"); } catch (e) { daemonCfg.doctor = e.status === 404 ? false : { error: e.message }; }
+  daemonCfg.doctorBusy = false;
+  renderSettings();
+}
+
+const SECTIONS = [["boards", "Boards"], ["health", "Health check"], ["plugins", "Plugins"], ["agents", "Agents and leases"], ["prefs", "This browser"]];
+
+function renderSettings() {
+  if (!state) return;
+  const root = $("#settings");
+  const cfg = daemonCfg.config && !daemonCfg.config.error ? daemonCfg.config : null;
+  const key = JSON.stringify([state.boards.map((b) => [b.id, b.health, b.console, b.power && b.power.limits, b.console_channels && b.console_channels.primary, b.shell_commands, b.driver]),
+    daemonCfg, prefs, view]);
+  renderIf(root, key, () => h("div", { class: "settings" },
+    h("nav", { class: "settings-nav" }, SECTIONS.map(([id, label]) =>
+      h("a", { href: `#settings`, onclick: (ev) => { ev.preventDefault(); const el = document.getElementById(`set-${id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); } }, label))),
+    h("div", { class: "settings-body" },
+      editNote(cfg),
+      section("boards", "Boards", "Each board's hardware, console and power, as arbiterd loaded them.",
+        state.boards.length ? state.boards.map((b) => boardSettings(b, cfg && (cfg.boards || []).find((c) => c.id === b.id))) : h("div", { class: "empty" }, "No boards configured.")),
+      section("health", "Health check", "The same checks as arbiter doctor. They read the setup and never touch a board.", doctorPanel()),
+      section("plugins", "Plugins", "Board drivers and power supplies arbiterd can load. A plugin is in use when a board names it.", pluginsPanel()),
+      section("agents", "Agents and leases", "How long agents may hold a board and how they wait in the queue.", agentsPanel(cfg)),
+      section("prefs", "This browser", "Saved in this browser only. They change how the dashboard looks, not the daemon.", prefsPanel()))));
+}
+
+function editNote(cfg) {
+  const where = cfg && cfg.path ? h("code", {}, cfg.path) : "config.toml in the arbiter state folder";
+  return h("div", { class: "alert note" }, h("span", { class: "text" },
+    "Board and daemon settings are read-only here for now. To change them, edit ", where, " and restart arbiterd. Settings under This browser can be changed below."));
+}
+
+function section(id, title, sub, ...body) {
+  return h("section", { class: "card set-section", id: `set-${id}` },
+    h("h2", {}, title), h("p", { class: "sub" }, sub), body);
+}
+
+// A read-only field. `v` undefined means this daemon doesn't report it yet.
+function field(label, v, hint) {
+  const missing = v === undefined;
+  const shown = missing ? "not reported yet" : v === null || v === "" ? "none" : Array.isArray(v) ? (v.length ? v.join(", ") : "none") : typeof v === "boolean" ? (v ? "yes" : "no") : v;
+  return h("div", { class: "field" },
+    h("div", { class: "label" }, label),
+    h("div", { class: `value ${missing || v === null || v === "" ? "muted" : ""}` }, shown),
+    hint ? h("div", { class: "hint" }, hint) : null);
+}
+
+function group(title, ...fields) {
+  return h("div", { class: "set-group" }, h("h3", {}, title), h("div", { class: "fields" }, fields));
+}
+
+function boardSettings(b, c) {
+  const pw = b.power;
+  const lim = (pw && pw.limits) || {};
+  const pc = c && c.power;
+  const mv = (x) => (x === null || x === undefined ? x : `${(x / 1000).toFixed(2)} V`);
+  const has = (k) => (c ? c[k] : undefined);
+  const ports = c ? (c.ports || []).map((p) => `${p.role}${p.name ? ` (${p.name})` : ""}: ${p.port || (p.vcom !== null && p.vcom !== undefined ? `VCOM${p.vcom}` : p.interface !== null && p.interface !== undefined ? `interface ${p.interface}` : "auto")}, ${p.baud} baud`) : undefined;
+  const cmds = c ? Object.entries(c.commands || {}).map(([k, v]) => h("div", { class: "cmd" }, h("span", { class: "n" }, k), h("code", {}, typeof v === "string" ? v : JSON.stringify(v)))) : null;
+  const health = b.health === "missing" || b.health === "error" ? h("span", { class: `pill ${b.health === "error" ? "err" : "warn"}` }, h("span", { class: "dot" }), b.health_note || b.health) : null;
+  return h("div", { class: "board-set" },
+    h("div", { class: "board-set-head" }, h("h3", {}, b.id), statusPill(b), health),
+    h("div", { class: "groups" },
+      group("Hardware",
+        field("Platform", b.platform),
+        field("Driver", b.driver),
+        field("Tags", b.tags || []),
+        field("Probe serial", has("probe_serial")),
+        field("J-Link device", has("device")),
+        field("Serial ports", ports)),
+      group("Console",
+        field("Mode", (b.console && b.console.mode) || undefined, "auto picks RTT only when the build has CONFIG_RTT_CONSOLE=y and no UART console."),
+        field("Primary channel", b.console_channels ? b.console_channels.primary : undefined),
+        field("Channels", (b.console && b.console.sources) || []),
+        field("Shell commands", b.shell_commands === null || b.shell_commands === undefined ? "none found in the flashed image" : `${b.shell_commands} in the flashed image`)),
+      group("Power",
+        field("Supply", pw ? pw.kind : "none"),
+        pw ? field("Voltage range", `${mv(lim.mv_min)} to ${mv(lim.mv_max)}`, "Refused outside this range, for agents and you alike.") : null,
+        pw ? field("Lease starts at", mv(lim.default_mv), "Agents need your OK to go above it.") : null,
+        pw ? field("Current limit", lim.ma_max === null || lim.ma_max === undefined ? null : `${lim.ma_max} mA`, "Over this, arbiter switches the supply off.") : null,
+        pw ? field("Agents may raise voltage", pc ? pc.allow_agent_raise_voltage : undefined) : null),
+      group("Agent rules",
+        field("Agents may erase", has("allow_agent_erase"), "When off, erase and recover ask you first."),
+        field("Longest lease", c ? (c.max_lease_min ? `${c.max_lease_min} min` : "the daemon default") : undefined),
+        field("Flash runner", c ? c.runner || "the build's default" : undefined))),
+    c && cmds && cmds.length ? h("div", { class: "set-group" }, h("h3", {}, "Custom commands"), h("div", { class: "cmds" }, cmds)) : null);
+}
+
+function doctorPanel() {
+  const d = daemonCfg.doctor;
+  const again = h("button", { class: "small", disabled: daemonCfg.doctorBusy, onclick: runDoctor }, daemonCfg.doctorBusy ? "Checking…" : "Run again");
+  if (d === false) return h("div", { class: "empty" }, "This arbiterd can't run the checks from here yet. Run ", h("code", {}, "arbiter doctor"), " in a terminal.");
+  if (d === null) return h("div", { class: "empty" }, "Checking…");
+  if (d.error) return h("div", {}, h("div", { class: "empty err" }, `The check failed: ${d.error}`), again);
+  const checks = d.checks || [];
+  const n = (s) => checks.filter((c) => c.status === s).length;
+  const order = { FAIL: 0, WARN: 1, OK: 2 };
+  return h("div", {},
+    h("div", { class: "doctor-head" },
+      h("span", {}, `${n("OK")} ok`, n("WARN") ? h("span", { class: "warn-text" }, ` · ${n("WARN")} to look at`) : null, n("FAIL") ? h("span", { class: "err-text" }, ` · ${n("FAIL")} failing`) : null,
+        d.at ? h("span", { class: "muted" }, ` · checked ${clock(d.at)}`) : null),
+      again),
+    h("div", { class: "checks" }, [...checks].sort((a, b) => order[a.status] - order[b.status]).map((c) =>
+      h("div", { class: `check-row ${c.status === "FAIL" ? "err" : c.status === "WARN" ? "warn" : ""}` },
+        h("span", { class: "st" }, c.status === "OK" ? "OK" : c.status === "WARN" ? "Warn" : "Fail"),
+        h("span", { class: "n" }, c.board ? `${c.board} · ${c.name}` : c.name),
+        h("span", { class: "d" }, c.detail || "")))));
+}
+
+function pluginsPanel() {
+  const p = daemonCfg.plugins;
+  if (p === null) return h("div", { class: "empty" }, "Loading…");
+  if (!p || p.error) return h("div", { class: "empty err" }, `Couldn't list plugins${p && p.error ? `: ${p.error}` : ""}.`);
+  const usedBy = (kind, name) => state.boards.filter((b) => (kind === "drivers" ? b.driver === name : b.power && b.power.kind === name)).map((b) => b.id);
+  const loaded = Object.fromEntries((p.loaded || []).map((x) => [`${x.kind}:${x.name}`, x]));
+  const rows = (kind, label) => (p[kind] || []).map((name) => {
+    const info = loaded[`${kind === "drivers" ? "driver" : "power"}:${name}`] || {};
+    const used = info.used_by || usedBy(kind, name);
+    return h("tr", {},
+      h("td", { class: "mono" }, name),
+      h("td", {}, label),
+      h("td", {}, info.ok === false ? h("span", { class: "pill err" }, h("span", { class: "dot" }), info.error || "failed to load")
+        : used.length ? h("span", { class: "pill busy" }, h("span", { class: "dot" }), "in use") : h("span", { class: "pill free" }, "available")),
+      h("td", { class: "muted" }, used.length ? used.join(", ") : "-"),
+      h("td", { class: "muted" }, `${{ entry_point: "package", path: "plugin folder" }[info.source] || "built in"}${info.version ? ` ${info.version}` : ""}`));
+  });
+  return h("div", { class: "scroll-x" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Kind"), h("th", {}, "Status"), h("th", {}, "Used by"), h("th", {}, "Source"))),
+    h("tbody", {}, rows("drivers", "Board driver"), rows("power", "Power supply"))));
+}
+
+function agentsPanel(cfg) {
+  const t = cfg ? cfg.timing || {} : null;
+  const s = (k) => (t ? (t[k] === undefined ? undefined : dur(t[k])) : undefined);
+  return h("div", { class: "fields" },
+    field("Lease length", s("lease_ttl_s"), "An agent's lease runs out after this unless it extends."),
+    field("Longest hold", s("max_hold_s"), "No agent keeps a board longer than this in one go."),
+    field("Agent counts as gone after", s("heartbeat_timeout_s"), "With no heartbeat for this long, its lease is at risk."),
+    field("Grace before losing a lease", s("grace_s")),
+    field("Claim a granted board within", s("claim_timeout_s")),
+    field("Queue ticket expires after", s("ticket_ttl_s")),
+    field("Your name in logs", cfg && cfg.daemon ? cfg.daemon.human_name : state.daemon && state.daemon.human));
+}
+
+function toggle(label, on, set, hint) {
+  return h("label", { class: "toggle-row" },
+    h("span", {}, h("span", { class: "label" }, label), hint ? h("span", { class: "hint" }, hint) : null),
+    h("input", { type: "checkbox", class: "switch", checked: !!on, onchange: (ev) => set(ev.target.checked) }));
+}
+
+function prefsPanel() {
+  const themes = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
+  const perm = "Notification" in window ? Notification.permission : "unsupported";
+  return h("div", { class: "prefs" },
+    h("div", { class: "toggle-row" },
+      h("span", {}, h("span", { class: "label" }, "Theme")),
+      h("div", { class: "tabs" }, themes.map(([k, label]) => h("button", { class: prefs.theme === k ? "on" : "", onclick: () => setPref("theme", k) }, label)))),
+    h("h3", {}, "Terminal"),
+    VIEW_OPTS.map(([k, label]) => toggle(label, view[k], (on) => setView(k, on),
+      { fold: "Shows bootloader and banner output as one line you can open.", ts: "Zephyr log times like [00:00:01.234,567].", prompt: "Prompts like uart:~$ and rtt:~$." }[k])),
+    h("h3", {}, "Activity and alerts"),
+    toggle("Only show the selected board's activity", prefs.feedOnly, (on) => setPref("feedOnly", on)),
+    toggle("Desktop notifications", prefs.notify, (on) => {
+      setPref("notify", on);
+      if (on && "Notification" in window && Notification.permission === "default") Notification.requestPermission().then(() => { delete $("#settings").dataset.key; renderSettings(); });
+    }, perm === "denied" ? "Blocked by the browser. Allow notifications for this page in the browser's site settings."
+      : perm === "unsupported" ? "This browser doesn't support them." : "For approvals and warnings while this tab is in the background."),
+    h("div", { class: "btn-row", style: "margin-top: var(--s4)" },
+      h("button", { class: "small", onclick: () => {
+        for (const [k, , d] of VIEW_OPTS) view[k] = d;
+        try { localStorage.removeItem(VIEW_KEY); localStorage.removeItem(PREFS_KEY); } catch (e) { /* no storage */ }
+        Object.assign(prefs, { theme: "system", notify: true, feedOnly: false });
+        applyView(); applyPrefs(); renderSettings();
+      } }, "Reset to defaults")));
+}
+
 // ------------------------------------------------------------------ notifications
 function toast(text, level) {
   const t = h("div", { class: `toast ${level || ""}` }, text);
@@ -1007,7 +1350,7 @@ function toast(text, level) {
 }
 
 function notifyOs(text) {
-  if (!("Notification" in window) || !document.hidden) return;
+  if (!prefs.notify || !("Notification" in window) || !document.hidden) return;
   if (Notification.permission === "granted") new Notification("arbiter", { body: text });
 }
 
@@ -1031,6 +1374,7 @@ async function start() {
     $("#login").hidden = true;
     $("#app").hidden = false;
     setState(s);
+    showPage();
     connectEvents();
   } catch (e) {
     showLogin(e.status === 401 ? "That token was refused. Use the admin token (admin.json), not the agent token." : `Can't reach arbiterd: ${e.message}`);
@@ -1050,16 +1394,23 @@ $("#pause-all").addEventListener("click", async () => {
   await Promise.all(held.map((b) => act(`Pause ${b.id}`, () => api("POST", `/api/admin/boards/${encodeURIComponent(b.id)}/pause`, { reason: "pause all" }))));
 });
 
-$("#feed-filter").addEventListener("change", renderFeed);
+$("#feed-filter").addEventListener("change", () => setPref("feedOnly", $("#feed-filter").checked));
 
 // Lease countdowns tick locally between state updates.
 setInterval(() => { if (state && !$("#app").hidden) render(); }, 1000);
 // A slow poll as a safety net in case an event is missed.
 setInterval(() => { if (token && !$("#app").hidden) refresh(); }, 15000);
 
+// Close an open menu on a click outside it.
+document.addEventListener("click", (ev) => {
+  for (const m of document.querySelectorAll("details.menu[open]")) if (!m.contains(ev.target)) m.open = false;
+});
 document.addEventListener("click", () => {
-  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  if (prefs.notify && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
 }, { once: true });
+
+window.addEventListener("hashchange", showPage);
+applyPrefs();
 
 token = initToken();
 if (token) start();

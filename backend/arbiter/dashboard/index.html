@@ -27,9 +27,10 @@
     <span id="conn" class="pill"><span class="dot"></span><span id="conn-text">connecting</span></span>
     <span id="summary" class="muted"></span>
     <span class="spacer"></span>
+    <nav class="tabs" id="nav"><a href="#" data-page="dash">Dashboard</a><a href="#settings" data-page="settings">Settings</a></nav>
     <button id="pause-all" title="Pause every agent that holds a board">Pause all agents</button>
   </header>
-  <div class="wrap">
+  <div class="wrap" id="dash">
     <div id="alerts"></div>
     <main>
       <div class="col">
@@ -50,6 +51,7 @@
       <div id="feed"></div>
     </div>
   </div>
+  <div class="wrap" id="settings" hidden></div>
 </div>
 <div id="toasts"></div>
 <script src="/static/app.js"></script>
