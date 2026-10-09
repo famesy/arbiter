@@ -411,6 +411,15 @@ def cmd_decode(args: argparse.Namespace) -> int:
     return 0 if res.get("ok") else 1
 
 
+def cmd_tracing(args: argparse.Namespace) -> int:
+    c = Client()
+    body = {"lease_token": _lease(c, args), "action": args.action, "channel": args.channel}
+    if args.build:
+        body["build_dir"] = str(Path(args.build).resolve())
+    _print(c.post("/api/tracing", body), True)
+    return 0
+
+
 def cmd_threads(args: argparse.Namespace) -> int:
     c = Client()
     res = c.post("/api/threads", {"lease_token": _lease(c, args), "warn_pct": args.warn})
@@ -900,6 +909,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--last-good", action="store_true", help="last passing run and what changed")
     sp.add_argument("--build", help="with --last-good: diff Kconfig against this build")
+    sp = add("tracing", cmd_tracing, "capture and summarise Zephyr CTF tracing")
+    sp.add_argument("action", choices=["start", "stop", "status"])
+    sp.add_argument("--channel")
+    sp.add_argument("--build", help="the flashed build dir, if arbiter didn't flash it")
+    sp.add_argument("--lease")
     sp = add("threads", cmd_threads, "stack use of every thread on your board")
     sp.add_argument("--warn", type=int, default=80, help="warn at this stack use (%%)")
     sp.add_argument("--lease")
