@@ -343,6 +343,10 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             )
         if action == "recover":
             return await arb.human_recover(bid, body.get("by") or human)
+        if action == "flash":
+            return await arb.human_flash(
+                bid, body.get("by") or human, body["build_dir"], body.get("domain")
+            )
         if action == "extend":
             b = arb.sched.board(bid)
             if not b.lease_token:

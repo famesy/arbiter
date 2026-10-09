@@ -51,6 +51,27 @@ DENY = [
     (r"\barbiter[/\\]admin\.json\b|ARBITER_ADMIN_TOKEN", "the admin token is for the human only"),
 ]
 ALLOW_PREFIX = re.compile(r"^\s*(arbiter|python3?\s+-m\s+arbiter)\b")
+# CLI commands only the human may run: they act with the admin token, and `dashboard`
+# prints it. Agents use the MCP tools or the agent commands (acquire, flash, read, ...).
+HUMAN_ONLY = {
+    "dashboard",
+    "console",
+    "pause",
+    "resume",
+    "take",
+    "revoke",
+    "hold-release",
+    "maintenance",
+    "send",
+    "supply",
+    "extend",
+    "program",
+    "approve",
+    "deny",
+}
+QUEUE_EDITS = {"move", "priority", "pin", "unpin", "cancel"}
+SEGMENT_SPLIT = re.compile(r"&&|\|\||[;|&\n]|\$\(|`")
+FILE_TOOLS = {"Read", "Edit", "Write", "MultiEdit", "Grep", "Glob", "NotebookEdit"}
 
 
 def _out(obj: dict[str, Any]) -> None:
@@ -67,12 +88,48 @@ def _payload() -> dict[str, Any]:
 
 
 def check_command(cmd: str) -> str | None:
-    """Return a deny reason for a shell command, or None to allow it."""
-    if ALLOW_PREFIX.match(cmd):
-        return None
-    for pat, why in DENY:
-        if re.search(pat, cmd):
+    """Return a deny reason for a shell command, or None to allow it. Each part of a
+    chained command (`a && b; c | d`) is checked on its own."""
+    for seg in SEGMENT_SPLIT.split(cmd):
+        why = _check_segment(seg.strip())
+        if why:
             return why
+    return None
+
+
+def _check_segment(seg: str) -> str | None:
+    if ALLOW_PREFIX.match(seg):
+        return _check_arbiter(seg)
+    for pat, why in DENY:
+        if re.search(pat, seg):
+            return why
+    return None
+
+
+def _check_arbiter(seg: str) -> str | None:
+    import shlex
+
+    try:
+        words = shlex.split(seg, posix=os.name != "nt")
+    except ValueError:
+        words = seg.split()
+    words = words[3:] if len(words) > 2 and words[1] == "-m" else words[1:]
+    args = []
+    skip = False
+    for w in words:  # drop global flags: --json, --label X
+        if skip:
+            skip = False
+        elif w == "--label":
+            skip = True
+        elif not w.startswith("-"):
+            args.append(w)
+    if not args:
+        return None
+    sub = args[0]
+    if sub in HUMAN_ONLY or (sub == "queue" and len(args) > 1 and args[1] in QUEUE_EDITS):
+        return f"`arbiter {sub}` is for the human only; ask them, or use the agent tools"
+    if sub == "init" and "--force" in words:
+        return "replacing an existing arbiter config is for the human only; ask them to run it"
     return None
 
 
@@ -90,19 +147,36 @@ def _queue_hint(ext: str | None) -> str:
     return " Boards: " + "; ".join(lines) + f". Queue length {q}."
 
 
+def check_file_tool(ti: dict[str, Any]) -> str | None:
+    """Deny reading or editing arbiter's admin token file with the agent's file tools."""
+    for k in ("file_path", "path", "pattern", "notebook_path"):
+        v = ti.get(k)
+        if isinstance(v, str) and re.search(r"admin\.json\b", v):
+            return "the admin token is for the human only"
+    return None
+
+
 def pre_tool_use(p: dict[str, Any]) -> None:
     tool = p.get("tool_name") or p.get("tool") or ""
     ti = p.get("tool_input") or {}
-    cmd = ti.get("command") if isinstance(ti, dict) else None
-    if tool not in SHELL_TOOLS or not isinstance(cmd, str):
+    if not isinstance(ti, dict):
         return
-    why = check_command(cmd)
+    cmd = ti.get("command")
+    if tool in FILE_TOOLS:
+        why = check_file_tool(ti)
+    elif tool in SHELL_TOOLS and isinstance(cmd, str):
+        why = check_command(cmd)
+    else:
+        return
     if not why:
         return
-    reason = (
-        f"arbiter: hardware is shared and brokered; {why}. Acquire a board first with acquire_board."
-        + _queue_hint(p.get("session_id"))
-    )
+    if "human only" in why:
+        reason = f"arbiter: {why}."
+    else:
+        reason = (
+            f"arbiter: hardware is shared and brokered; {why}. Acquire a board first with "
+            "acquire_board." + _queue_hint(p.get("session_id"))
+        )
     _out(
         {
             "hookSpecificOutput": {
@@ -150,14 +224,28 @@ def session_start(p: dict[str, Any]) -> None:
             pass
     _out(
         {
+            "systemMessage": _startup_note(c),
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": "Shared dev boards are brokered by arbiter. Use its MCP tools "
                 "(acquire_board, flash, serial_expect, release_board) or the "
                 "`arbiter` CLI; never touch probes or serial ports directly.",
-            }
+            },
         }
     )
+
+
+def _startup_note(c: Client) -> str:
+    """One line for the human: where the dashboard is (no token in it), or how to set up."""
+    from .config import load_config
+
+    try:
+        configured = load_config().path is not None
+    except Exception:
+        configured = True  # a broken config is reported by the daemon and `arbiter doctor`
+    if not configured:
+        return "arbiter: no boards configured yet; run /arbiter:setup"
+    return f"arbiter: dashboard at {c.base} (open with `arbiter dashboard`)"
 
 
 def post_tool_use(p: dict[str, Any]) -> None:

@@ -107,6 +107,13 @@ def test_elf_fallback(tmp_path):
         "cat ~/.local/state/arbiter/admin.json",
         "pyocd flash x.hex",
         "STM32_Programmer_CLI -c port=SWD",
+        "arbiter dashboard --no-open",
+        "arbiter --json take sim-1",
+        "python -m arbiter approve a-12",
+        "arbiter queue move t-1 0",
+        "arbiter status && cat ~/.local/state/arbiter/admin.json",
+        "arbiter read; JLinkExe -device x",
+        "arbiter flash build | west flash",
     ],
 )
 def test_hooks_deny_raw_hardware(cmd):
@@ -122,6 +129,10 @@ def test_hooks_deny_raw_hardware(cmd):
         "west twister -p native_sim -T tests",
         "git status",
         "ls /dev",
+        "arbiter queue",
+        "arbiter --label fw acquire nrf9161dk --wait 30",
+        "arbiter init --write",
+        "arbiter expect 'ok|done' --timeout 5 2>&1 | tail -5",
     ],
 )
 def test_hooks_allow_normal_work(cmd):
@@ -156,3 +167,13 @@ def test_pre_tool_use_denies_on_each_shell_tool(tool, capsys, tmp_path, monkeypa
     pre_tool_use({"tool_name": tool, "tool_input": {"command": "nrfjprog --program fw.hex"}})
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_file_tools_cannot_read_the_admin_token(capsys):
+    from arbiter.hooks import pre_tool_use
+
+    pre_tool_use({"tool_name": "Read", "tool_input": {"file_path": "/x/arbiter/admin.json"}})
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    pre_tool_use({"tool_name": "Read", "tool_input": {"file_path": "/x/arbiter/README.md"}})
+    assert capsys.readouterr().out == ""

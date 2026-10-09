@@ -50,6 +50,9 @@ class Timing:
     max_wait_s: float = 45
     # A session holding nothing is dropped after this long without hearing from it.
     idle_session_s: float = 60 * 60
+    # Using a free board (typing, reset, flash, power) holds it for the human until they
+    # have been idle this long; agents asking meanwhile wait in the queue.
+    human_idle_s: float = 120
 
 
 @dataclass
@@ -172,6 +175,8 @@ class BoardSlot:
     lease_token: str | None = None
     held_by: str | None = None
     note: str | None = None
+    human_auto: bool = False  # HUMAN because they used it, not `take`: ends when idle
+    human_seen: float = 0.0
 
 
 Listener = Callable[[str, dict[str, Any]], None]
@@ -534,6 +539,11 @@ class Scheduler:
                 le = self.leases[b.lease_token]
                 s = self.sessions.get(le.session_id)
                 h.update(holder=s.label if s else le.session_id, reason=le.reason)
+            elif b.state == HUMAN:
+                h["holder"] = b.held_by or "human"
+                if b.human_auto:
+                    idle = max(0.0, self.t.human_idle_s - (self.clock() - b.human_seen))
+                    h["free_in_s"] = round(idle)
             holders.append(h)
         return {
             "status": "queued",
@@ -756,7 +766,7 @@ class Scheduler:
     def resume(self, board_id: str, by: str = "human") -> Lease | None:
         b = self.board(board_id)
         if b.state == HUMAN:
-            b.state, b.held_by = AVAILABLE, None
+            b.state, b.held_by, b.human_auto = AVAILABLE, None, False
             self.emit("board.state", board=board_id, state=b.state)
             self.dispatch()
             return None
@@ -822,8 +832,19 @@ class Scheduler:
         self.dispatch()
         return lease
 
+    def human_activity(self, board_id: str, by: str) -> None:
+        """The human used a board directly. A free board becomes theirs until they have been
+        idle for human_idle_s, so an agent doesn't grab it mid-session. Explicit holds
+        (`take`) are kept until given back."""
+        b = self.board(board_id)
+        b.human_seen = self.clock()
+        if b.state == AVAILABLE and b.lease_token is None:
+            b.state, b.held_by, b.human_auto = HUMAN, by, True
+            self.emit("board.state", board=board_id, state=HUMAN, held_by=by, auto=True)
+
     def take(self, board_id: str, by: str, reason: str = "") -> Lease | None:
         """Human takes the board outright: an idle board goes to HUMAN, a leased one is revoked."""
+        self.board(board_id).human_auto = False
         return self.revoke(
             board_id, by=by, reason=reason or "human took the board", requeue=True, to_human=True
         )
@@ -919,6 +940,16 @@ class Scheduler:
                     if lease.state == ACTIVE:
                         self._start_grace(lease)
         self._drop_stale_sessions(now)
+        for b in self.boards.values():
+            if (
+                b.state == HUMAN
+                and b.human_auto
+                and b.lease_token is None
+                and now - b.human_seen > self.t.human_idle_s
+            ):
+                b.state, b.held_by, b.human_auto = AVAILABLE, None, False
+                self.emit("board.state", board=b.id, state=AVAILABLE, reason="human idle")
+                self.dispatch()
         changed = False
         for lease in list(self.leases.values()):
             if lease.state == EXPIRING and lease.grace_until and now >= lease.grace_until:
@@ -1043,6 +1074,7 @@ class Scheduler:
                 b = self.boards[k]
                 if v["state"] in (MAINTENANCE, NEEDS_RECOVER, HUMAN) and not b.lease_token:
                     b.state, b.held_by, b.note = v["state"], v.get("held_by"), v.get("note")
+                    b.human_auto, b.human_seen = bool(v.get("human_auto")), now
         for k, v in data.get("tickets", {}).items():
             if v["session_id"] not in self.sessions:
                 continue
