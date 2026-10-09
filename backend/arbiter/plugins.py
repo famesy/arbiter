@@ -61,6 +61,7 @@ POWER_ACTIONS = ("on", "off", "set_voltage", "set_current_limit", "measure")
 
 # ------------------------------------------------------------------ registry
 def _builtin_drivers() -> dict[str, DriverFactory]:
+    from .drivers.emulator import EmulatorDriver
     from .drivers.native_sim import NativeSimDriver
     from .drivers.sim import SimDriver
     from .drivers.west import NrfDriver, Stm32Driver, WestDriver
@@ -68,6 +69,9 @@ def _builtin_drivers() -> dict[str, DriverFactory]:
     return {
         "sim": SimDriver,
         "native_sim": NativeSimDriver,
+        "emulator": EmulatorDriver,
+        "qemu": EmulatorDriver,
+        "renode": EmulatorDriver,
         "west": WestDriver,
         "nrf": NrfDriver,
         "stm32": Stm32Driver,

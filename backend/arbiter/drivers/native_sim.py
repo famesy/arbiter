@@ -90,6 +90,7 @@ PTY_LINE = re.compile(rb"connected to pseudotty: (/dev/pts/\d+)")
 
 class NativeSimDriver(BoardDriver):
     kind = "native_sim"
+    is_process = True
     capabilities = frozenset({"flash", "reset", "halt", "recover", "console", "run", "power"})
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
@@ -120,7 +121,7 @@ class NativeSimDriver(BoardDriver):
             self.health, self.health_note = "error", why
             return
         self.dir.mkdir(parents=True, exist_ok=True)
-        if self.image.exists() and self.autostart:
+        if self._has_image() and self.autostart:
             await self._launch()
         else:
             self.health, self.health_note = "ok", "no image flashed yet"
@@ -133,14 +134,10 @@ class NativeSimDriver(BoardDriver):
         return self.platform_support()[0]
 
     # ---------------------------------------------------------------- process
-    async def _launch(self) -> None:
-        await self._kill()
-        if not self.image.exists():
-            raise ArbiterError(
-                "OP_FAILED",
-                "nothing flashed yet",
-                hint="Call flash with a native_sim build dir first.",
-            )
+    def _has_image(self) -> bool:
+        return self.image.exists()
+
+    def _argv(self) -> list[str]:
         argv = [str(self.image), *self.extra_args]
         if (
             self.uart_mode == "stdio"
@@ -148,6 +145,17 @@ class NativeSimDriver(BoardDriver):
             and "--uart_stdinout" not in argv
         ):
             argv.append("-uart_stdinout")
+        return argv
+
+    async def _launch(self) -> None:
+        await self._kill()
+        if not self._has_image():
+            raise ArbiterError(
+                "OP_FAILED",
+                "nothing flashed yet",
+                hint=f"Call flash with a {self.cfg.platform} build dir first.",
+            )
+        argv = self._argv()
         master, slave = _open_pty()
         try:
             self.proc = await asyncio.create_subprocess_exec(
@@ -161,7 +169,7 @@ class NativeSimDriver(BoardDriver):
         finally:
             os.close(slave)
         self._master = master
-        self.hub.annotate(f"[arbiter] native_sim started (pid {self.proc.pid})")
+        self.hub.annotate(f"[arbiter] {self.kind} started (pid {self.proc.pid})")
         await self.hub.detach_all()
         if self.uart_mode == "stdio":
             await self.hub.attach(CallbackSource("uart:app", self._write_master))
@@ -189,7 +197,7 @@ class NativeSimDriver(BoardDriver):
     async def _write_master(self, data: bytes) -> None:
         if self._master is None:
             raise ArbiterError(
-                "BOARD_OFFLINE", "native_sim is not running", hint="Flash or power it on first."
+                "BOARD_OFFLINE", f"{self.kind} is not running", hint="Flash or power it on first."
             )
         os.write(self._master, data)
 
@@ -206,7 +214,7 @@ class NativeSimDriver(BoardDriver):
         if proc is self.proc:
             await asyncio.sleep(0.1)  # let the last output drain
             self._close_master()
-            self.hub.annotate(f"[arbiter] native_sim exited with code {code}")
+            self.hub.annotate(f"[arbiter] {self.kind} exited with code {code}")
             self.last_exit = code
             self.proc = None
 
@@ -316,8 +324,8 @@ class NativeSimDriver(BoardDriver):
     # ---------------------------------------------------------------- power (used by NativePower)
     async def set_power(self, on: bool) -> None:
         self.powered = on
-        if on and not self.running and self.image.exists():
+        if on and not self.running and self._has_image():
             await self._launch()
         elif not on:
             await self._kill()
-            self.hub.annotate("[arbiter] native_sim powered off")
+            self.hub.annotate(f"[arbiter] {self.kind} powered off")

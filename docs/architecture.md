@@ -615,6 +615,10 @@ Instances never touch probes, so the per-probe lock, the re-enumeration handling
 - **macOS:** unsupported for sim in the first release.
 - **Remote hosts later:** a Linux bench host (phase 3) is the easiest place to run sims for any client.
 
+### QEMU and Renode boards
+
+Zephyr's emulated boards are boards too (`driver = "qemu"` or `"renode"`). `flash` remembers the build dir and starts the build's own emulator target, as `west build -t run` does: `cmake --build <build> --target run` for QEMU boards (`qemu_x86`, `qemu_cortex_m3`, `mps2/an385`, ...) and `run_renode` for Renode. The emulated UART is the process's stdio on a pty arbiter owns, so the console, `shell_exec`, crash triage, coredumps and twister-style runs behave as on hardware, and power and reset restart the emulator. They cover what `native_sim` can't: the real architecture (Cortex-M faults, MPU, the real interrupt controller) and, with Renode, peripherals of real SoCs. Linux and macOS; on Windows, inside WSL.
+
 ### Phasing
 
 Sim support is small, since it reuses the `ConsoleHub`, `run` and GDB paths. It is built early (phase 1b) so every agent flow has a no-hardware path.

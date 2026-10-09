@@ -19,7 +19,9 @@ lease from its queue, use it through the arbiter tools, and give it back.
 2. **Prefer a sim board for logic tests.** Build for `native_sim` and acquire
    `native_sim`: you get your own instance at once, with no queue. Ask for real
    hardware only when the test needs it (radio, modem, timing, power,
-   peripherals), and ideally after it already passes on `native_sim`.
+   peripherals), and ideally after it already passes on `native_sim`. If
+   `list_boards` shows a QEMU or Renode board, use it for checks that need the
+   real CPU architecture (faults, MPU, interrupts) before the real board.
 3. **Acquire only when you are ready to use the board**, with a build already
    made. Give a short `reason`; the human sees it on the dashboard.
 4. **Queued is normal; don't block on it.** `acquire_board` may return
