@@ -36,10 +36,13 @@ arbiter status
 ```
 
 With no config the daemon starts one simulated board (`sim-1`) so you can try
-everything without hardware. For real boards, copy
-[examples/arbiter.toml](examples/arbiter.toml) to the state dir as `config.toml`
+everything without hardware. For real boards, run `arbiter init`: it finds the probes
+plugged in (and nRF Connect SDK in `C:\ncs` or `~/ncs`), prints a draft `config.toml` and
+where it would go, and writes nothing. `arbiter init --write` saves it, and won't replace
+an existing config without `--force`. Agents may run both (the `/arbiter:setup` skill
+shows you the draft first); `--force` is for you only. The config lives in the state dir
 (`~/.local/state/arbiter/` on Linux, `%LOCALAPPDATA%\arbiter\` on Windows, or
-`$ARBITER_HOME`). `arbiter discover` prints a `[[board]]` block for each probe it finds.
+`$ARBITER_HOME`); [examples/arbiter.toml](examples/arbiter.toml) shows every setting.
 
 On Windows with nRF Connect SDK, set `daemon.toolchain_env` to the toolchain bundle's
 `environment.json`, because `west` and `nrfutil` are not on PATH outside nRF Connect's
@@ -129,7 +132,19 @@ arbiter queue                          # show the queue
 arbiter queue move <ticket> 1           # also: priority, pin, unpin, cancel
 arbiter supply nrf9161dk-1 cycle
 arbiter send nrf9161dk-1 "kernel uptime"   # type a line without taking the board
+arbiter program nrf9161dk-1 build/      # flash a free board yourself
 ```
+
+A board no agent holds is yours to use from the dashboard or the CLI, with no lease:
+type, reset, flash, power. Using it holds it for you until you have been idle for
+`timing.human_idle_s` (120 s), so an agent asking meanwhile waits in the queue and is
+told who has the board and when it frees up. `arbiter take` holds it until you
+`resume`. Once an agent holds a board you can still type into it, but flashing,
+resetting and power need `pause` or `take` first.
+
+Consoles come back by themselves after a reset, a power cycle or the probe
+re-enumerating over USB, and the agent keeps its lease: UART reopens the port it
+finds again by probe serial, and RTT reattaches with backoff.
 
 You can type into a board's console while an agent holds it. Your lines show as
 `[you] > ...` and the agent's as `[claude-1a2b] > ...`. Writes never interleave

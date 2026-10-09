@@ -363,6 +363,7 @@ class Arbiter:
         rec = await rt.hub.write(raw, sender, channel)
         self.bus.publish("console.write", {"board": rt.cfg.id, **rec.to_dict()})
         if sender.kind == "human":
+            self.sched.human_activity(rt.cfg.id, f"human:{sender.name or self.cfg.human_name}")
             slot = self.sched.boards.get(rt.cfg.id)
             lease = self.sched.leases.get(slot.lease_token or "") if slot else None
             if lease is not None and lease.state in sch.LIVE_LEASE_STATES:
@@ -1311,7 +1312,7 @@ class Arbiter:
         self, board_id: str, action: str, by: str, mv: int | None = None
     ) -> dict[str, Any]:
         rt = self.rt(board_id)
-        self._human_may_drive(board_id)
+        self._human_may_drive(board_id, by)
         if action == "set_voltage":
             p = self._power(rt, "voltage", human=True)
             lim = rt.cfg.power
@@ -1322,16 +1323,59 @@ class Arbiter:
             return {"ok": True, "mv": mv}
         return await self._do_power(rt, action, 500, f"human:{by}")
 
+    async def human_flash(
+        self, board_id: str, by: str, build_dir: str, domain: str | None = None
+    ) -> dict[str, Any]:
+        """Flash a board as the human, without a lease. Erasing still goes through recover."""
+        rt = self.rt(board_id)
+        self._human_may_drive(board_id, by)
+        self._need(rt, "flash")
+        rt.hub.annotate(f"[arbiter] human:{by} flashing {build_dir}")
+        start = rt.hub.ends()
+        async with rt.probe_lock:
+            detached = await rt.driver.detach_debug()
+            try:
+                res = await rt.driver.flash(
+                    Path(build_dir),
+                    domain=domain,
+                    erase=False,
+                    cwd=None,
+                    log_path=self._board_log(rt, "flash"),
+                    on_line=lambda le: None,
+                )
+            finally:
+                # the console follows the new build (UART or RTT), as after an agent's flash
+                cmap = None
+                with contextlib.suppress(Exception):
+                    cmap = detect_from_build(Path(build_dir))
+                if cmap is not None and cmap.resolved != "unknown":
+                    await rt.driver.set_console(cmap)
+                    self.bus.publish(
+                        "board.console", {"board": rt.cfg.id, "console": cmap.to_dict()}
+                    )
+                else:
+                    await rt.driver.reattach_debug(detached)
+        if res.get("ok") and rt.hub.sources:
+            boot = await await_boot(rt.hub, 10, start, [rt.hub.primary])
+            res["boot_confirmed"] = boot["booted"]
+            if boot.get("failed"):
+                res["boot_failed"] = boot["failed"]
+        if res.get("ok"):
+            res["shell_commands"] = await self._read_shell(rt, Path(build_dir))
+        rt.hub.annotate(f"[arbiter] flash {'ok' if res.get('ok') else 'FAILED'}")
+        self.sched.human_activity(board_id, f"human:{by}")
+        return res
+
     async def human_reset(self, board_id: str, by: str, halt: bool = False) -> dict[str, Any]:
         rt = self.rt(board_id)
-        self._human_may_drive(board_id)
+        self._human_may_drive(board_id, by)
         rt.hub.annotate(f"[arbiter] human:{by} reset")
         async with rt.probe_lock:
             return await rt.driver.reset(halt=halt, log_path=self._board_log(rt, "reset"))
 
     async def human_recover(self, board_id: str, by: str) -> dict[str, Any]:
         rt = self.rt(board_id)
-        self._human_may_drive(board_id)
+        self._human_may_drive(board_id, by)
         self._need(rt, "recover")
         rt.hub.annotate(f"[arbiter] human:{by} recovering (chip erase)")
         async with rt.probe_lock:
@@ -1340,12 +1384,15 @@ class Arbiter:
             self.sched.clear_needs_recover(board_id)
         return res
 
-    def _human_may_drive(self, board_id: str) -> None:
+    def _human_may_drive(self, board_id: str, by: str) -> None:
+        """A human may drive a board nobody holds, one they hold, or one they paused. Using a
+        free board holds it for them until they go idle (see Scheduler.human_activity)."""
         b = self.sched.board(board_id)
         if b.state in (sch.LEASED,):
             raise ArbiterError(
                 "BOARD_BUSY", f"{board_id} is leased to an agent; pause or take it first"
             )
+        self.sched.human_activity(board_id, f"human:{by}")
 
     # =================================================================== config
     def config_path(self) -> Path:

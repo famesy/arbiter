@@ -232,7 +232,12 @@ class NrfDriver(WestDriver):
             else (0 if port is None or port.role == "app" else None)
         )
         if vcom is not None and vcom in self._vcoms:
-            return self._vcoms[vcom]
+            cached = self._vcoms[vcom]
+            if any(x.device == cached for x in discovery.ports_for(self.cfg.probe_serial or "")):
+                return cached
+            # the probe re-enumerated under new port names: use interface numbers until
+            # present() reads the map from nrfutil again
+            self._vcoms, self._vcoms_at = {}, 0.0
         iface = (
             port.interface
             if port is not None and port.interface is not None

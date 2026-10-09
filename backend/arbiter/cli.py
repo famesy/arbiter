@@ -8,7 +8,6 @@ import asyncio
 import contextlib
 import json
 import os
-import subprocess
 import sys
 import time
 import webbrowser
@@ -389,28 +388,14 @@ def cmd_hook(args: argparse.Namespace) -> int:
 def cmd_discover(args: argparse.Namespace) -> int:
     from .config import load_config, load_toolchain_env
     from .drivers import discovery
-    from .procs import which
+    from .starter import nrfutil_devices
 
     with contextlib.suppress(Exception):
         cfg = load_config()
         if cfg.toolchain_env:
             load_toolchain_env(cfg.toolchain_env)  # nrfutil lives in the NCS toolchain bundle
     probes = discovery.probes()
-    nrf: list[dict[str, Any]] = []
-    nrfutil = which("nrfutil")
-    if nrfutil:
-        try:
-            out = subprocess.run(
-                [nrfutil, "device", "list", "--json"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=20,
-                stdin=subprocess.DEVNULL,
-            ).stdout
-            nrf = discovery.parse_nrfutil_list(out)
-        except (OSError, subprocess.SubprocessError):
-            pass
+    nrf = nrfutil_devices()
     if args.json:
         _print({"probes": probes, "nrfutil": nrf}, True)
         return 0
@@ -438,6 +423,46 @@ def cmd_discover(args: argparse.Namespace) -> int:
                 name = "tfm" if platform.startswith("nrf91") and vcom == 1 else f"vcom{vcom}"
                 print(f'\n[[board.port]]\nrole = "aux"\nname = "{name}"\nvcom = {vcom}')
         print()
+    return 0
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    from . import starter
+    from .config_edit import write_atomic
+
+    path = Path(args.config) if args.config else starter.default_path()
+    raw, found = starter.detect()
+    text = starter.render(raw, found)
+    exists = path.exists()
+    if args.json:
+        _print(
+            {"path": str(path), "exists": exists, "probes": found, "config": raw, "toml": text},
+            True,
+        )
+    else:
+        print(f"# target: {path}" + (" (exists)" if exists else ""))
+        print(text)
+    if not args.write:
+        if not args.json:
+            print(f"# Nothing written. Run `arbiter init --write` to save it to {path}.")
+        return 0
+    if exists and not args.force:
+        print(f"{path} already exists; add --force to replace it (a .bak is kept)", file=sys.stderr)
+        return 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(path, text, keep_backup=exists)
+    if not args.json:
+        print(f"# Wrote {path}. Start the daemon with `arbiter daemon`.")
+    return 0
+
+
+def cmd_program(args: argparse.Namespace) -> int:
+    build = Path(args.build_dir).expanduser().resolve()
+    body: dict[str, Any] = {"build_dir": str(build)}
+    if args.domain:
+        body["domain"] = args.domain
+    c = Client(admin=True)
+    _print(c.post(f"/api/admin/boards/{args.board}/flash", body), args.json)
     return 0
 
 
@@ -581,6 +606,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "event", choices=["session-start", "pre-tool-use", "post-tool-use", "session-end"]
     )
+    sp = add("init", cmd_init, "detect boards and draft a config.toml")
+    sp.add_argument("--write", action="store_true", help="save the draft")
+    sp.add_argument("--force", action="store_true", help="replace an existing config")
+    sp.add_argument("--config", help="where to write (default: the daemon's config path)")
+    sp = add("program", cmd_program, "flash a free board as the human")
+    sp.add_argument("board")
+    sp.add_argument("build_dir")
+    sp.add_argument("--domain")
     sp = add("dashboard", cmd_dashboard, "open the dashboard")
     sp.add_argument("--no-open", action="store_true")
     # human controls

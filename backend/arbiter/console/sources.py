@@ -112,11 +112,14 @@ class UartSource:
 class RttSource:
     """SEGGER RTT through pylink (`pip install pylink-square`). Optional: when pylink
     or the J-Link DLL is missing, start() annotates the console and stays idle.
+    Reattaches by itself after the probe or target drops out.
 
     Not verified on hardware yet."""
 
     name = "rtt"
     writable = True
+    retry_s = 0.5
+    max_retry_s = 5.0
 
     def __init__(self, probe_serial: str, device: str, block_address: int | None = None):
         self.probe_serial = probe_serial
@@ -128,38 +131,68 @@ class RttSource:
 
     async def start(self, hub: ConsoleHub) -> None:
         try:
-            import pylink
+            import pylink  # noqa: F401
         except ImportError:
             hub.annotate(
                 "[arbiter] RTT needs pylink-square (pip install pylink-square); RTT console is off"
             )
             return
+        self._task = asyncio.create_task(self._run(hub))
 
-        def open_jlink() -> Any:
-            jl = pylink.JLink()
+    def _open(self) -> Any:
+        import pylink
+
+        jl = pylink.JLink()
+        try:
             jl.open(serial_no=int(self.probe_serial))
             jl.set_tif(pylink.enums.JLinkInterfaces.SWD)
             jl.connect(self.device)
             jl.rtt_start(self.block_address)
-            return jl
+        except Exception:
+            with contextlib.suppress(Exception):
+                jl.close()
+            raise
+        return jl
 
-        try:
-            self._jl = await asyncio.to_thread(open_jlink)
-        except Exception as e:  # pylink raises many types
-            hub.annotate(f"[arbiter] RTT attach failed: {e}")
-            return
-        self.connected = True
-        hub.annotate("[arbiter] rtt attached")
-        self._task = asyncio.create_task(self._pump(hub))
+    async def _run(self, hub: ConsoleHub) -> None:
+        """Attach, read until the probe or target goes away (reset, power cycle, USB
+        re-enumeration), then attach again with backoff. The lease is not touched."""
+        backoff, failures = self.retry_s, 0
+        while True:
+            try:
+                self._jl = await asyncio.to_thread(self._open)
+            except Exception as e:  # pylink raises many types
+                if failures == 0:
+                    hub.annotate(f"[arbiter] RTT attach failed: {e}; retrying")
+                failures += 1
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 1.5, self.max_retry_s)
+                continue
+            backoff, failures = self.retry_s, 0
+            self.connected = True
+            hub.annotate("[arbiter] rtt attached")
+            err = await self._pump(hub)
+            self.connected = False
+            jl, self._jl = self._jl, None
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(jl.close)
+            hub.annotate(f"[arbiter] rtt lost ({err}); reconnecting")
+            await asyncio.sleep(backoff)
 
-    async def _pump(self, hub: ConsoleHub) -> None:
+    async def _pump(self, hub: ConsoleHub) -> str:
+        idle = 0
         while True:
             try:
                 data = await asyncio.to_thread(self._jl.rtt_read, 0, 4096)
+                if not data:
+                    idle += 1
+                    # quiet for a while: make sure the target is still there
+                    if idle % 20 == 0 and not await asyncio.to_thread(self._jl.target_connected):
+                        return "target not connected"
             except Exception as e:
-                hub.annotate(f"[arbiter] RTT read failed: {e}")
-                return
+                return str(e) or type(e).__name__
             if data:
+                idle = 0
                 hub.feed(bytes(data), self.name)
             else:
                 await asyncio.sleep(0.05)
@@ -167,6 +200,8 @@ class RttSource:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._task
             self._task = None
         if self._jl is not None:
             jl, self._jl = self._jl, None
