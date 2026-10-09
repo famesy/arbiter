@@ -147,3 +147,16 @@ async def test_mouse(daemon, build_dir):
         f5 = next(k for k in app.query(FooterKey) if k.key == "f5")
         await pilot.click(f5)
         await until(pilot, lambda: app.board is not None and app.board["state"] == "HUMAN")
+
+
+async def test_state_updates_while_a_popup_is_open(daemon):
+    app = ArbiterTui()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await until(pilot, lambda: app.board is not None)
+        await pilot.press("f4")
+        await until(pilot, lambda: isinstance(app.screen, QueuePopup))
+        app.render_status()
+        app.update_hint()
+        app.set_state(app.state)
+        await pilot.press("escape")
+        await until(pilot, lambda: not app.screen.is_modal)

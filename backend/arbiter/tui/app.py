@@ -25,8 +25,9 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.geometry import Size
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.scroll_view import ScrollView
 from textual.selection import Selection
 from textual.strip import Strip
@@ -267,6 +268,9 @@ class Popup(ModalScreen[None]):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         # Each button names the action its key runs: id="move--1" runs move(1).
         name, _, arg = (event.button.id or "").partition("--")
+        if name == "dismiss":
+            self.dismiss()
+            return
         await self.run_action(f"{name}({arg.replace('_', '-')})" if arg else name)
 
     @property
@@ -554,12 +558,24 @@ class ArbiterTui(App[int]):
         yield Footer(compact=True, show_command_palette=False)
 
     @property
+    def base(self) -> Screen[Any]:
+        """The main screen. `self.query_one` would search the popup on top, if one is open."""
+        if not self.screen_stack:
+            raise NoMatches("the app is shutting down")
+        return self.screen_stack[0]
+
+    @property
+    def ui_ready(self) -> bool:
+        """False while the app starts or shuts down; workers still running then skip the UI."""
+        return bool(self.screen_stack) and self.is_running
+
+    @property
     def console_view(self) -> ConsoleView:
-        return self.query_one(ConsoleView)
+        return self.base.query_one(ConsoleView)
 
     @property
     def input(self) -> ShellInput:
-        return self.query_one(ShellInput)
+        return self.base.query_one(ShellInput)
 
     @property
     def board(self) -> dict[str, Any] | None:
@@ -622,6 +638,8 @@ class ArbiterTui(App[int]):
         self.set_timer(0.15, go)
 
     def set_state(self, s: dict[str, Any]) -> None:
+        if not self.ui_ready:
+            return
         self.state = s
         self.skew = float(s.get("now", time.time())) - time.time()
         ids = [b["id"] for b in s.get("boards") or []]
@@ -711,10 +729,11 @@ class ArbiterTui(App[int]):
     @work(exclusive=True, group="console")
     async def console_loop(self, board: str, channel: str) -> None:
         human = (self.state.get("daemon") or {}).get("human")
+        view = self.console_view  # kept: the app may be closing when the socket drops
         while True:
             b = self.board or {}
             model = ConsoleModel(names=channel_names(b) if b else [], me=human)
-            self.console_view.set_model(model)
+            view.set_model(model)
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             code: int | None = None
             try:
@@ -725,7 +744,7 @@ class ArbiterTui(App[int]):
                     async for msg in ws:
                         if isinstance(msg, bytes):
                             model.feed(decoder.decode(msg))
-                            self.console_view.schedule()
+                            view.schedule()
                         else:  # an error from the daemon
                             self.notify(_error_text(msg), severity="error")
                     code = ws.close_code
@@ -733,10 +752,10 @@ class ArbiterTui(App[int]):
                 pass
             if code == 4404:
                 model.note(f"[tui] {board} has no console channel {channel!r}")
-                self.console_view.update_rows()
+                view.update_rows()
                 return
             model.note("[tui] console disconnected, reconnecting")
-            self.console_view.update_rows()
+            view.update_rows()
             await asyncio.sleep(2)
 
     # -------------------------------------------------------------- shell input
@@ -757,7 +776,8 @@ class ArbiterTui(App[int]):
             data = None  # older daemons have no endpoint
         if self.shell_board == board:
             self.shell = ShellTree(data)
-            self.update_suggest()
+            if self.ui_ready:
+                self.update_suggest()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         # A click on a suggestion completes it.
@@ -769,7 +789,7 @@ class ArbiterTui(App[int]):
         self.update_suggest()
 
     def update_suggest(self) -> None:
-        box = self.query_one(Suggest)
+        box = self.base.query_one(Suggest)
         opts = self.shell.options(self.input.value, self.forced)
         if not opts:
             self.forced = False
@@ -788,7 +808,7 @@ class ArbiterTui(App[int]):
 
     def shell_key(self, key: str) -> bool:
         """Keys for the suggestions and history. True when handled."""
-        box = self.query_one(Suggest)
+        box = self.base.query_one(Suggest)
         n = box.option_count
         value = self.input.value
         if key == "tab":
@@ -829,7 +849,7 @@ class ArbiterTui(App[int]):
         return False
 
     def accept(self, index: int) -> None:
-        box = self.query_one(Suggest)
+        box = self.base.query_one(Suggest)
         opt = box.get_option_at_index(index)
         if opt.id is None:
             return
@@ -854,7 +874,7 @@ class ArbiterTui(App[int]):
             self.input.value = ""
 
     def update_hint(self) -> None:
-        hint = self.query_one("#hint", Static)
+        hint = self.base.query_one("#hint", Static)
         b = self.board
         text = self.shell.help_for(self.input.value)
         if not text and b and b["state"] == "LEASED" and b.get("lease"):
@@ -873,7 +893,10 @@ class ArbiterTui(App[int]):
 
     # -------------------------------------------------------------- status bar
     def render_status(self) -> None:
-        self.query_one("#status", Static).update(self.status_text())
+        # The 1 s timer can fire while the app is shutting down and its widgets are gone.
+        if self.ui_ready:
+            with contextlib.suppress(NoMatches):
+                self.base.query_one("#status", Static).update(self.status_text())
 
     def status_text(self) -> RenderableType:
         left = Text(no_wrap=True, overflow="ellipsis")
