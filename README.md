@@ -59,3 +59,9 @@ pytest backend/tests -m "not integration"
 Tool settings live at the repo root: `ruff.toml`, `mypy.ini`, `.pre-commit-config.yaml`. Keep `[tool.ruff]` and `[tool.mypy]` out of `backend/pyproject.toml`, so there is one source of truth.
 
 Integration tests (`@pytest.mark.integration`) never run by default. Start them from **Actions > Integration > Run workflow**, choosing `simulated` or `hardware` (a self-hosted runner labelled `arbiter-hw` with the boards attached), or add the `run-integration` label to a pull request.
+
+## License
+
+arbiter is licensed under the [Apache License 2.0](LICENSE).
+
+Optional PPK2 power control uses IRNAS [`ppk2-api`](https://github.com/IRNAS/ppk2-api-python), which is GPL-2.0. arbiter does not ship it: it is imported only when a board's power kind is `ppk2`, and you install it yourself (`pip install ppk2-api`). Check that its license suits you before redistributing the two together.
