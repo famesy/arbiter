@@ -62,6 +62,12 @@ async def until(pilot, cond, wait_s: float = 5.0) -> None:
     raise AssertionError("condition not met")
 
 
+def side_offset(app, text: str) -> tuple[int, int]:
+    """Where a line of the sidebar is, inside its border and padding."""
+    rows = app.side_text().plain.split("\n")
+    return 4, 1 + next(i for i, r in enumerate(rows) if text in r)
+
+
 async def click_ready(pilot, find, offset=(0, 0)) -> None:
     """Click a widget once it is laid out, and check the click landed on it. On slow
     runners a widget can still have no region, or be replaced (the footer is rebuilt when
@@ -142,15 +148,25 @@ async def test_mouse(daemon, build_dir):
         await pilot.press("ctrl+c")
         assert app.clipboard
 
-        # The board names in the status line switch boards.
-        await click_ready(pilot, lambda: app.query_one("#status"), offset=(10, 0))
+        # The boards in the sidebar switch boards.
+        side = lambda: app.query_one("#side")  # noqa: E731
+        await click_ready(pilot, side, offset=side_offset(app, "sim-2"))
         await until(pilot, lambda: app.selected == "sim-2")
 
-        # The queue opens from the status line; its buttons and a click outside work.
-        await click_ready(pilot, lambda: app.query_one("#status"), offset=(29, 0))  # "queue 0"
+        # The queue opens from the sidebar; its buttons and a click outside work.
+        await click_ready(pilot, side, offset=side_offset(app, "QUEUE"))
         await until(pilot, lambda: isinstance(app.screen, QueuePopup))
         await click_ready(pilot, lambda: app.screen.query_one("#dismiss"))
         await until(pilot, lambda: not app.screen.is_modal)
+
+        # F1 hides the sidebar; the one-line status bar takes its place and works the same.
+        await pilot.press("f1")
+        await until(pilot, lambda: app.query_one("#status").display)
+        assert not app.query_one("#side").display
+        await click_ready(pilot, lambda: app.query_one("#status"), offset=(2, 0))  # "sim-1"
+        await until(pilot, lambda: app.selected == "sim-1")
+        await pilot.press("f1")
+        await until(pilot, lambda: app.query_one("#side").display)
 
         # The footer keys are buttons too: F5 takes the board.
         await click_ready(pilot, lambda: next(k for k in app.query(FooterKey) if k.key == "f5"))
