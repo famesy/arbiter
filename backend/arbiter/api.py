@@ -309,6 +309,17 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             body.get("test"), body.get("board"), body.get("build_dir"), body.get("cwd")
         )
 
+    async def modem_at(ctx: Ctx, body: Body) -> Any:
+        return await arb.at(
+            sid(ctx), body["lease_token"], body["cmd"], float(body.get("timeout_s", 10))
+        )
+
+    async def lte_status(ctx: Ctx, body: Body) -> Any:
+        return await arb.lte_status(sid(ctx), body["lease_token"], float(body.get("timeout_s", 10)))
+
+    async def modem_trace(ctx: Ctx, body: Body) -> Any:
+        return await arb.modem_trace(sid(ctx), body["lease_token"], body.get("action", "status"))
+
     async def console_detect(ctx: Ctx, body: Body) -> Any:
         return await arb.detect_console(
             sid(ctx), body["lease_token"], body.get("build_dir"), body.get("elf")
@@ -592,6 +603,9 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/image-info", a(image_info), methods=["POST"]),
         Route("/api/history", a(history), methods=["GET"]),
         Route("/api/history/last-good", a(last_good), methods=["POST"]),
+        Route("/api/modem/at", a(modem_at), methods=["POST"]),
+        Route("/api/modem/lte-status", a(lte_status), methods=["POST"]),
+        Route("/api/modem/trace", a(modem_trace), methods=["POST"]),
         Route("/api/gdb/batch", a(gdb_batch), methods=["POST"]),
         Route("/api/gdb/continue", a(gdb_continue), methods=["POST"]),
         Route("/api/gdb/stop", a(gdb_stop), methods=["POST"]),

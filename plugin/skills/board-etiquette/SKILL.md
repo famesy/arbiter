@@ -157,6 +157,16 @@ instead: flash a working image, then `arbiter release`. Exit codes: `0` OK, `75`
   diff and the commits and files in your repo). `history()` lists recent
   flashes and runs on each board.
 
+## nRF91 modem
+
+- `at(cmd="AT+CEREG?")` sends one AT command through your app (needs
+  `CONFIG_AT_SHELL=y`, or an AT console app such as at_client).
+- `lte_status()` answers "is it on LTE, and if not, why": registration,
+  cell, band, signal in dBm, APN and IP, with hints.
+- `modem_trace(action="start")` / `"stop"` captures a modem trace from an
+  image built with `-S nrf91-modem-trace-uart`, and returns a PcapNG for
+  Wireshark when nrfutil's trace command is installed.
+
 ## When the board crashes
 
 arbiter watches every console channel for Zephyr fatal errors (faults,

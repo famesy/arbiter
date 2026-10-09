@@ -36,7 +36,7 @@ def state_dir() -> Path:
 
 @dataclass
 class PortConfig:
-    role: str = "app"  # app | aux
+    role: str = "app"  # app | aux | trace (nRF91 modem trace UART, binary)
     # Channel name suffix (uart:<name>). App ports are always uart:app. Aux ports, such as
     # TF-M's VCOM1, are read and tagged but never written.
     name: str | None = None
