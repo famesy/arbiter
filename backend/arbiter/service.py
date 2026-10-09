@@ -214,9 +214,9 @@ class Arbiter:
 
     async def _add_board(self, bc: BoardConfig) -> None:
         hub = ConsoleHub(bc.id, self.cfg.log_dir)
-        if bc.driver == "native_sim" and bc.power.kind == "none":
-            bc.power.kind = "native"  # power on/off/cycle = start/kill/restart the process
         driver: BoardDriver = make_driver(bc, hub, self.cfg.state, self.cfg.plugin_paths)
+        if driver.is_process and bc.power.kind == "none":
+            bc.power.kind = "native"  # power on/off/cycle = start/kill/restart the process
         ok, why = driver.platform_support()
         power = make_power_device(bc.power, driver, self.cfg.plugin_paths)
         rt = BoardRuntime(bc, driver, hub, power, supported=ok, support_note=why)
@@ -1401,7 +1401,7 @@ class Arbiter:
         lease, rt = self._check(token, session_id)
         raw = data.encode()
         if newline and not raw.endswith((b"\n", b"\r")):
-            raw += b"\r\n" if rt.driver.kind != "native_sim" else b"\n"
+            raw += b"\n" if rt.driver.is_process else b"\r\n"
         rec = await self.console_send(rt, raw, self._sender(lease.session_id), channel)
         return {"ok": True, "bytes": len(raw), "channel": rec.channel, "cursor": rec.cursor}
 
@@ -1880,7 +1880,7 @@ class Arbiter:
                 zb = zephyr_base_for_run(cmd, base, getattr(rt.driver, "zephyr_base", None))
                 if zb:
                     run_env["ZEPHYR_BASE"] = zb  # so west finds its workspace from anywhere
-            if rt.driver.kind != "native_sim" and mode != "query":
+            if not rt.driver.is_process and mode != "query":
                 if IS_WINDOWS:
                     # No PTY on Windows: lend the real COM port to the test for the run.
                     port = getattr(rt.driver, "resolve_app_port", lambda: None)()
@@ -2319,7 +2319,7 @@ class Arbiter:
         rt = self.rt(board_id)
         raw = data.encode()
         if newline and not raw.endswith((b"\n", b"\r")):
-            raw += b"\r\n" if rt.driver.kind != "native_sim" else b"\n"
+            raw += b"\n" if rt.driver.is_process else b"\r\n"
         rec = await self.console_send(rt, raw, Sender.human(by), channel)
         return {"ok": True, "channel": rec.channel, "cursor": rec.cursor, "seq": rec.seq}
 
