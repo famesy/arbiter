@@ -23,8 +23,9 @@ from ..config import BoardConfig, PortConfig
 from ..console.detect import ConsoleMap, detect_from_build
 from ..console.hub import ConsoleHub
 from ..console.sources import RttSource, UartSource
+from ..dfu import mcumgr_conn
 from ..errors import ArbiterError
-from ..procs import run_proc, start_detached, which
+from ..procs import ProcResult, run_proc, start_detached, which
 from ..workspace import west_context
 from . import discovery
 from .base import BoardDriver, LineFn
@@ -42,7 +43,7 @@ JLINK_DEVICES = {
 
 class WestDriver(BoardDriver):
     kind = "west"
-    capabilities = frozenset({"flash", "console", "run", "debug"})
+    capabilities = frozenset({"flash", "console", "run", "debug", "dfu"})
     flash_timeout = 300.0
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
@@ -74,10 +75,13 @@ class WestDriver(BoardDriver):
     def resolve_app_port(self) -> str | None:
         return self.resolve(self.app_port())
 
+    async def _attach_app_uart(self) -> None:
+        p = self.app_port()
+        await self.hub.attach(UartSource(self.resolve_app_port, p.baud if p else 115200))
+
     async def start(self) -> None:
         if self.cfg.console in ("auto", "uart"):
-            p = self.app_port()
-            await self.hub.attach(UartSource(self.resolve_app_port, p.baud if p else 115200))
+            await self._attach_app_uart()
             for aux in (x for x in self.cfg.ports if x.role == "aux"):
                 await self.hub.attach(
                     UartSource(
@@ -176,6 +180,26 @@ class WestDriver(BoardDriver):
             out["console"] = (await self._after_flash(build_dir)).to_dict()
         return out
 
+    async def smp(self, args: list[str], *, log_path: Path, timeout_s: float = 60) -> ProcResult:
+        """mcumgr over the port with role "smp", else the app UART, which the console gives
+        up while the command runs."""
+        smp_port = next((p for p in self.cfg.ports if p.role == "smp"), None)
+        port_cfg = smp_port or self.app_port()
+        port = self.resolve(port_cfg)
+        if not port:
+            raise ArbiterError("NOT_SUPPORTED", "no serial port for MCUmgr on this board")
+        argv = [self.tool("mcumgr"), *mcumgr_conn(port, port_cfg.baud if port_cfg else 115200)]
+        shared = smp_port is None and "uart:app" in self.hub.sources
+        if shared:
+            await self.hub.detach("uart:app")
+        try:
+            return await run_proc(
+                [*argv, *args], timeout_s=timeout_s, log_path=log_path, tail_lines=200
+            )
+        finally:
+            if shared:
+                await self._attach_app_uart()
+
     async def debugserver(
         self, build_dir: Path, port: int, log_path: Path
     ) -> asyncio.subprocess.Process:
@@ -217,7 +241,7 @@ class WestDriver(BoardDriver):
 class NrfDriver(WestDriver):
     kind = "nrf"
     capabilities = frozenset(
-        {"flash", "reset", "recover", "console", "rtt", "run", "debug", "modem_trace"}
+        {"flash", "reset", "recover", "console", "rtt", "run", "debug", "dfu", "modem_trace"}
     )
     default_runner = "nrfutil"  # what `west flash` uses for these boards in NCS v3
 
@@ -345,7 +369,7 @@ class NrfDriver(WestDriver):
 
 class Stm32Driver(WestDriver):
     kind = "stm32"
-    capabilities = frozenset({"flash", "reset", "recover", "console", "run", "debug"})
+    capabilities = frozenset({"flash", "reset", "recover", "console", "run", "debug", "dfu"})
 
     def _conn(self) -> list[str]:
         return ["-c", "port=SWD", f"sn={self.cfg.probe_serial}"]

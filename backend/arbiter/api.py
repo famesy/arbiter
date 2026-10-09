@@ -231,6 +231,18 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             float(body.get("wait_s", 45)),
         )
 
+    async def dfu(ctx: Ctx, body: Body) -> Any:
+        return await arb.dfu(
+            sid(ctx),
+            body["lease_token"],
+            body["build_dir"],
+            bool(body.get("confirm", True)),
+            float(body.get("wait_s", 45)),
+        )
+
+    async def dfu_status(ctx: Ctx, body: Body) -> Any:
+        return await arb.dfu_status(sid(ctx), body["lease_token"])
+
     async def reset(ctx: Ctx, body: Body) -> Any:
         return await arb.reset(sid(ctx), body["lease_token"], bool(body.get("halt", False)))
 
@@ -622,6 +634,8 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/console/shell", a(console_shell), methods=["POST"]),
         Route("/api/gdb/start", a(gdb_start), methods=["POST"]),
         Route("/api/threads", a(thread_health), methods=["POST"]),
+        Route("/api/dfu", a(dfu), methods=["POST"]),
+        Route("/api/dfu/status", a(dfu_status), methods=["POST"]),
         Route("/api/image-info", a(image_info), methods=["POST"]),
         Route("/api/history", a(history), methods=["GET"]),
         Route("/api/history/last-good", a(last_good), methods=["POST"]),
