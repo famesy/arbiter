@@ -1117,7 +1117,7 @@ function describe(ev) {
     case "lease.op": return [`${sess(lease ? lease.session_id : "")} ${typeof d.op === "string" ? d.op : JSON.stringify(d.op)} on ${d.board}`];
     case "board.state": return [`${d.board} is now ${(STATUS[d.state] || d.state).toLowerCase()}${d.held_by ? ` by ${who(d.held_by)}` : ""}${d.note ? `: ${d.note}` : ""}`,
       ["OFFLINE", "NEEDS_RECOVER"].includes(d.state) ? "err" : ""];
-    case "board.shell": return [`${d.board} shell: ${d.available ? `${d.count} commands from the flashed image` : "no commands found"}`];
+    case "board.shell": return [`${d.board} shell: ${d.available ? `${d.count} commands from the flashed image` : `no commands (${d.reason || "none found"})`}`];
     case "board.console": return [`${d.board} console detected: ${d.console && d.console.resolved}${d.console && d.console.method ? ` (${d.console.method})` : ""}`];
     case "op.started": return [`${sess(d.op.session)} started ${d.op.kind} on ${d.op.board}`];
     case "op.finished": {
@@ -1270,7 +1270,7 @@ function renderSettings() {
   if (!state) return;
   const root = $("#settings");
   const cfg = daemonCfg.config && !daemonCfg.config.error ? daemonCfg.config : null;
-  const key = JSON.stringify([state.boards.map((b) => [b.id, b.health, b.console, b.power && b.power.limits, b.console_channels && b.console_channels.primary, b.shell_commands, b.driver]),
+  const key = JSON.stringify([state.boards.map((b) => [b.id, b.health, b.console, b.power && b.power.limits, b.console_channels && b.console_channels.primary, b.shell_commands, b.shell_reason, b.driver]),
     daemonCfg, prefs, view, edit.scope, edit.rev, edit.busy, edit.conflict]);
   renderIf(root, key, () => h("div", { class: "settings" },
     h("nav", { class: "settings-nav" }, SECTIONS.map(([id, label]) =>
@@ -1364,7 +1364,7 @@ function boardSettings(b, c) {
         field("Mode", (b.console && b.console.mode) || undefined, "auto picks RTT only when the build has CONFIG_RTT_CONSOLE=y and no UART console."),
         field("Primary channel", b.console_channels ? b.console_channels.primary : undefined),
         field("Channels", (b.console && b.console.sources) || []),
-        field("Shell commands", b.shell_commands === null || b.shell_commands === undefined ? "none found in the flashed image" : `${b.shell_commands} in the flashed image`)),
+        field("Shell commands", b.shell_commands === null || b.shell_commands === undefined ? `none: ${b.shell_reason || "none found in the flashed image"}` : `${b.shell_commands} in the flashed image`)),
       group("Power",
         field("Supply", pw ? pw.kind : "none"),
         pw ? field("Voltage range", `${mv(lim.mv_min)} to ${mv(lim.mv_max)}`, "Refused outside this range, for agents and you alike.") : null,

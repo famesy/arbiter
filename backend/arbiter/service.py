@@ -30,7 +30,7 @@ from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
 from .store import EventBus, Store
 from .workspace import zephyr_base_for_run
-from .zephyr_shell import ShellCommands
+from .zephyr_shell import ShellCommands, normalize
 
 log = logging.getLogger("arbiter")
 _R = TypeVar("_R")
@@ -43,6 +43,7 @@ BOOT_RX = r"\*\*\* Booting (?!MCUboot)[^\n]*?\*\*\*|Booting Zephyr OS|Booting nR
 # Older bootloaders print the plain Zephyr banner, then these lines.
 BOOTLOADER_RX = r"Starting bootloader|Bootloader chainload|Jumping to the first image slot"
 RUN_NOTE = "a test run left firmware that does not boot"
+NOT_FLASHED = "nothing has been flashed through arbiter yet"
 BOOT_FAIL_RX = (
     r"Unable to find bootable image|Image in the primary slot is not valid|No bootable image"
 )
@@ -184,7 +185,7 @@ class Arbiter:
         power = make_power_device(bc.power, driver, self.cfg.plugin_paths)
         rt = BoardRuntime(bc, driver, hub, power, supported=ok, support_note=why)
         if self.store:
-            rt.shell = self.store.get(f"shell:{bc.id}")
+            rt.shell = normalize(self.store.get(f"shell:{bc.id}"))
         self.boards[bc.id] = rt
         slot = self.sched.add_board(bc.id, bc.platform, bc.tags)
         if not ok:
@@ -741,7 +742,12 @@ class Arbiter:
             self.store.put(f"shell:{rt.cfg.id}", rt.shell)
         self.bus.publish(
             "board.shell",
-            {"board": rt.cfg.id, "available": info.available, "count": rt.shell["count"]},
+            {
+                "board": rt.cfg.id,
+                "available": info.available,
+                "count": rt.shell["count"],
+                "reason": info.reason,
+            },
         )
         return rt.shell["count"] if info.available else None
 
@@ -751,11 +757,15 @@ class Arbiter:
             return {
                 "board": board_id,
                 "available": False,
-                "reason": "nothing has been flashed through arbiter yet",
+                "reason": NOT_FLASHED,
                 "count": 0,
                 "commands": [],
             }
         return rt.shell
+
+    @staticmethod
+    def _shell_reason(rt: BoardRuntime) -> str:
+        return str(rt.shell.get("reason") or "unknown") if rt.shell else NOT_FLASHED
 
     def _gate(
         self, lease: sch.Lease, rt: BoardRuntime, action: str, args: dict[str, Any]
@@ -1601,7 +1611,19 @@ class Arbiter:
         from .doctor import run_checks
 
         checks = await asyncio.to_thread(run_checks, self.cfg.path, True, self.cfg)
+        checks[-1:-1] = [self._shell_check(rt) for rt in self.boards.values()]
         return {"at": time.time(), "checks": [c.to_dict() for c in checks]}
+
+    def _shell_check(self, rt: BoardRuntime) -> Any:
+        """Whether the console can offer the flashed image's shell commands, and if not, why."""
+        from .doctor import OK, WARN, Check
+
+        name = f"board {rt.cfg.id}: shell commands"
+        sh = rt.shell
+        if sh and sh.get("available"):
+            src = sh.get("image") or sh.get("elf") or "the flashed image"
+            return Check(OK, name, f"{sh['count']} from {src}", rt.cfg.id)
+        return Check(WARN, name, f"no console hints: {self._shell_reason(rt)}", rt.cfg.id)
 
     # =================================================================== snapshot
     def snapshot(self) -> dict[str, Any]:
@@ -1611,6 +1633,7 @@ class Arbiter:
             b.update(rt.driver.describe())
             b["supported"], b["support_note"] = rt.supported, rt.support_note or None
             b["shell_commands"] = rt.shell["count"] if rt.shell and rt.shell["available"] else None
+            b["shell_reason"] = None if b["shell_commands"] is not None else self._shell_reason(rt)
             b["power"] = rt.power.describe() if rt.power else None
             b["op"] = rt.op.public() if rt.op and rt.op.ended is None else None
             b["console_channels"] = {"primary": rt.hub.primary, "ends": rt.hub.ends()}

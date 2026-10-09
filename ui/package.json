@@ -1,0 +1,22 @@
+{
+  "name": "@arbiter/ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "arbiter dashboard components (plain DOM, no framework) with Storybook stories",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./style.css": "./style.css"
+  },
+  "scripts": {
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build -o storybook-static",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@storybook/html-vite": "10.6.1",
+    "storybook": "10.6.1",
+    "vite": "8.3.4"
+  }
+}

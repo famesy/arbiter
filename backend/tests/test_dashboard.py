@@ -30,3 +30,13 @@ def test_dashboard_needs_no_token_but_api_does(tmp_path: Path):
         assert client.get("/api/state").status_code == 401
         assert client.get("/api/admin/audit", params={"token": "agent"}).status_code == 403
         assert client.get("/api/admin/audit", params={"token": "admin"}).status_code == 200
+
+
+def test_dashboard_components_are_served_as_javascript(tmp_path: Path):
+    # Browsers refuse ES modules served as anything but JavaScript.
+    app = create_app(Arbiter(make_config(tmp_path)), Auth("agent", "admin"), DASHBOARD_DIR)
+    with TestClient(app) as client:
+        for name in ("index.js", "dom.js"):
+            res = client.get(f"/static/components/{name}")
+            assert res.status_code == 200
+            assert "javascript" in res.headers["content-type"]

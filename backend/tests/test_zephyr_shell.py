@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from arbiter.config import BoardConfig
 from arbiter.service import Arbiter
-from arbiter.zephyr_shell import ShellCommand, from_build, from_elf
+from arbiter.zephyr_shell import ShellCommand, from_build, from_elf, normalize
 
 from .conftest import make_config
 from .test_detect_and_hooks import write_elf32
@@ -68,6 +68,28 @@ def test_image_without_shell_or_not_an_elf(tmp_path):
     assert not from_build(tmp_path / "missing").available
 
 
+def test_empty_command_table_is_no_shell(tmp_path):
+    # Zephyr's linker script defines the section bounds even without CONFIG_SHELL.
+    z = tmp_path / "zephyr"
+    z.mkdir()
+    bounds = {"_shell_root_cmds_list_start": 0x8000, "_shell_root_cmds_list_end": 0x8000}
+    write_elf32(z / "zephyr.elf", bounds)
+    res = from_elf(z / "zephyr.elf")
+    assert not res.available and res.reason == "the image has no shell"
+    (z / ".config").write_text("CONFIG_UART_CONSOLE=y\n# CONFIG_SHELL is not set\n")
+    res = from_build(tmp_path)
+    assert not res.available and res.reason == "the image was built without CONFIG_SHELL"
+    (z / "zephyr.elf").unlink()
+    assert from_build(tmp_path).reason == f"no zephyr.elf in {z}"
+
+
+def test_stored_empty_record_reads_as_no_shell():
+    old = {"board": "b", "available": True, "reason": "", "count": 0, "commands": []}
+    assert normalize(old) == {**old, "available": False, "reason": "the image has no shell"}
+    good = {"available": True, "count": 1, "commands": [{"name": "help"}]}
+    assert normalize(good) is good and normalize(None) is None
+
+
 def sysbuild_with_shell(root: Path) -> Path:
     b = root / "build"
     for img in ("mcuboot", "app"):
@@ -102,6 +124,12 @@ async def test_flash_records_commands_for_the_board(tmp_path):
     await arb.start()
     try:
         assert not arb.shell_commands("cmd-1")["available"]
+        assert (
+            arb.snapshot()["boards"][0]["shell_reason"]
+            == "nothing has been flashed through arbiter yet"
+        )
+        check = [c for c in (await arb.doctor())["checks"] if c["name"].endswith("shell commands")]
+        assert check[0]["status"] == "WARN" and "nothing has been flashed" in check[0]["detail"]
         q = arb.bus.subscribe()
         s, tok = await lease_for(arb, board="cmd-1")
         res = await done(arb, await arb.flash(s, tok, str(build)))
@@ -110,6 +138,14 @@ async def test_flash_records_commands_for_the_board(tmp_path):
         assert info["available"] and info["image"] == "app" and info["build_dir"] == str(build)
         assert [c["name"] for c in info["commands"]] == ["app", "device", "help", "kernel"]
         assert arb.snapshot()["boards"][0]["shell_commands"] == 9
+        assert arb.snapshot()["boards"][0]["shell_reason"] is None
+        check = [c for c in (await arb.doctor())["checks"] if c["name"].endswith("shell commands")]
+        assert check[0] == {
+            "status": "OK",
+            "name": "board cmd-1: shell commands",
+            "detail": "9 from app",
+            "board": "cmd-1",
+        }
         kinds = []
         while not q.empty():
             kinds.append(q.get_nowait()["kind"])

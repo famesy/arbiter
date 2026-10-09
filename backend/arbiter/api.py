@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import mimetypes
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -27,6 +28,10 @@ from .service import Arbiter
 
 # The bundled web dashboard (plain HTML/CSS/JS, no build step).
 DASHBOARD_DIR = Path(__file__).parent / "dashboard"
+
+# The dashboard loads as ES modules, which browsers refuse unless served as JavaScript.
+# Windows takes the type from the registry, where .js is sometimes text/plain.
+mimetypes.add_type("text/javascript", ".js")
 
 Handler = Callable[..., Awaitable[Any]]
 Endpoint = Callable[[Request], Awaitable[Response]]
