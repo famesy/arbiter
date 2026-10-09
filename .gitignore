@@ -34,3 +34,4 @@ twister-out*/
 *.swp
 .DS_Store
 Thumbs.db
+storybook-static/
