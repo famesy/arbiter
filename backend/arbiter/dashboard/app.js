@@ -1143,7 +1143,7 @@ function setConn(up) {
 // (GET /api/admin/config, /api/admin/doctor), and says so where a value isn't exposed yet.
 const PREFS_KEY = "arbiter.prefs";
 const prefs = (() => {
-  const p = { theme: "system", notify: true, feedOnly: false };
+  const p = { notify: true, feedOnly: false };
   try { Object.assign(p, JSON.parse(localStorage.getItem(PREFS_KEY) || "{}")); } catch (e) { /* no storage */ }
   return p;
 })();
@@ -1155,9 +1155,6 @@ function setPref(k, v) {
 }
 
 function applyPrefs() {
-  const root = document.documentElement;
-  if (prefs.theme === "light" || prefs.theme === "dark") root.dataset.theme = prefs.theme;
-  else delete root.dataset.theme;
   $("#feed-filter").checked = !!prefs.feedOnly;
   if (state) renderFeed();
 }
@@ -1701,13 +1698,9 @@ function toggle(label, on, set, hint) {
 }
 
 function prefsPanel() {
-  const themes = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
   const perm = "Notification" in window ? Notification.permission : "unsupported";
   return h("div", { class: "prefs" },
-    h("div", { class: "toggle-row" },
-      h("span", {}, h("span", { class: "label" }, "Theme")),
-      h("div", { class: "tabs" }, themes.map(([k, label]) => h("button", { class: prefs.theme === k ? "on" : "", onclick: () => setPref("theme", k) }, label)))),
-    h("h3", {}, "Terminal"),
+    h("h3", { style: "margin-top: 0" }, "Terminal"),
     VIEW_OPTS.map(([k, label]) => toggle(label, view[k], (on) => setView(k, on),
       { fold: "Shows bootloader and banner output as one line you can open.", ts: "Zephyr log times like [00:00:01.234,567].", prompt: "Prompts like uart:~$ and rtt:~$." }[k])),
     h("h3", {}, "Activity and alerts"),
@@ -1721,7 +1714,7 @@ function prefsPanel() {
       h("button", { class: "small", onclick: () => {
         for (const [k, , d] of VIEW_OPTS) view[k] = d;
         try { localStorage.removeItem(VIEW_KEY); localStorage.removeItem(PREFS_KEY); } catch (e) { /* no storage */ }
-        Object.assign(prefs, { theme: "system", notify: true, feedOnly: false });
+        Object.assign(prefs, { notify: true, feedOnly: false });
         applyView(); applyPrefs(); renderSettings();
       } }, "Reset to defaults")));
 }
