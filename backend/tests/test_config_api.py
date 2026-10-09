@@ -91,6 +91,25 @@ def test_boards_ports_and_new_tables():
     assert "# the module's limit" in out and "# ---- the DK on the left" in out
 
 
+def test_new_sections_read_like_hand_written_ones():
+    out = edit(
+        {
+            "timing.grace_s": 10,
+            "boards.dk.commands.reset": "r",
+            "boards.new-1": {"driver": "sim", "power": {"kind": "sim"}},
+        }
+    )
+    # [timing] goes above the boards, under [daemon]; headings stay above their section
+    assert 'default_mv = 3700\n\n[board.commands]\nreset = "r"\n\n# ---- the simulator\n' in out
+    assert "\n\n[timing]\ngrace_s = 10\n\n# ---- the DK on the left\n[[board]]" in out
+    assert out.endswith(
+        'driver = "sim"\n\n[[board]]\nid = "new-1"\ndriver = "sim"\n\n[board.power]\nkind = "sim"\n'
+    )
+    assert edit({"timing.grace_s": 5}, '[[board]]\nid = "a"\n') == (
+        '[timing]\ngrace_s = 5\n\n[[board]]\nid = "a"\n'
+    )
+
+
 def test_inline_tables_are_edited_in_place():
     text = '[[board]]\nid = "dk"  # mine\npower = {kind = "sim", mv_max = 4200}\n'
     out = edit({"boards.dk.power.mv_max": 4000}, text)

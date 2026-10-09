@@ -399,7 +399,7 @@ def render(old_text: str, old_raw: dict[str, Any], new_raw: dict[str, Any]) -> s
     comments, key order and blank lines stay. Only the keys that changed are touched."""
     doc = tomlkit.parse(old_text) if old_text.strip() else tomlkit.document()
     _sync(doc, old_raw if old_text.strip() else {}, new_raw)
-    text = tomlkit.dumps(doc)
+    text = tomlkit.dumps(doc).lstrip("\n")
     if tomllib.loads(text) != new_raw:  # never write something that reads back differently
         text = tomlkit.dumps(_item(new_raw))
     return text
@@ -410,6 +410,7 @@ def _item(v: Any) -> Any:
     tables, so new boards and ports look like hand-written ones."""
     if isinstance(v, dict):
         t = tomlkit.table()
+        t.trivia.indent = "\n"  # a blank line above each new section header
         for k, x in v.items():
             if x is not None:
                 t.add(k, _item(x))
@@ -476,22 +477,29 @@ def _last_table(t: Any) -> Any:
     return t
 
 
+def _take_trailing(t: Any) -> list[Any]:
+    """Remove and return the comments that end `t` in the file (in tomlkit they belong to
+    its last table, though they head whatever comes next)."""
+    body = _last_table(t).value.body
+    n = 0
+    for k, _v in reversed(body):
+        if k is not None:
+            break
+        n += 1
+    tail = [v for _k, v in body[len(body) - n :]]
+    if not any(isinstance(v, tomlkit.items.Comment) for v in tail):
+        return []
+    del body[len(body) - n :]
+    return tail
+
+
 def _carry_trailing(src: Any, dst: Any) -> None:
     """Before deleting `src`, move the comments that end it (the next section's heading)
     to the end of `dst`, so they survive."""
-    body = _last_table(src).value.body
-    tail: list[Any] = []
-    for k, v in reversed(body):
-        if k is not None:
-            break
-        tail.insert(0, v)
-    while tail and not isinstance(tail[0], tomlkit.items.Comment):
-        tail.pop(0)  # keep only from the first comment on
-    if tail:
-        target = _last_table(dst)
-        target.add(tomlkit.nl())
-        for item in tail:
-            target.add(item)
+    tail = _take_trailing(src)
+    target = _last_table(dst)
+    for item in tail:
+        target.add(item)
 
 
 def _add(container: Any, key: str, item: Any) -> None:
@@ -507,7 +515,25 @@ def _add(container: Any, key: str, item: Any) -> None:
         with contextlib.suppress(Exception):
             getattr(container, "value", container)._insert_after(last, key, item)
             return
+    if isinstance(container, tomlkit.TOMLDocument):
+        aots = [i for i, (_k, v) in enumerate(container.body) if isinstance(v, tomlkit.items.AoT)]
+        if isinstance(item, tomlkit.items.Table) and aots:
+            # top-level sections such as [timing] go above the [[board]] array, under the
+            # comments that head the array
+            prev = container.body[aots[0] - 1][1] if aots[0] else None
+            tail = _take_trailing(prev) if isinstance(prev, tomlkit.items.Table) else []
+            container._insert_at(aots[0], key, item)
+            for c in tail or [tomlkit.nl()]:
+                _last_table(item).add(c)
+            return
+        container.add(key, item)
+        return
+    tail = _take_trailing(container) if not plain else []
     container.add(key, item)
+    if tail:  # the next section's heading stays above the next section
+        target = _last_table(container)
+        for c in tail:
+            target.add(c)
 
 
 def _sync_boards(aot: Any, old: list[dict[str, Any]], new: list[dict[str, Any]]) -> None:
