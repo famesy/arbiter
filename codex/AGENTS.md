@@ -40,8 +40,9 @@ If `arbiter` is missing, has no config or finds no boards, set it up with the hu
 1. `arbiter --help`. If it is missing, ask before installing:
    `pipx install "git+https://github.com/famesy/arbiter#subdirectory=backend"`.
 2. `arbiter init` prints a draft config from the connected probes and writes nothing. Show
-   the draft to the human; only after they say yes, run `arbiter init --write`
-   (add `--force` to replace an existing config only if they agree).
+   the draft to the human; only after they say yes, run `arbiter init --write`. If a
+   config already exists, only the human can replace it (`arbiter init --write --force`
+   in their own terminal; agents are blocked from `--force`).
 3. `arbiter doctor` and fix each `FAIL` with the human, then `arbiter status`.
 4. Tell the human to open the dashboard with `arbiter dashboard` in their own terminal.
    Don't run it yourself: it prints their admin token.
