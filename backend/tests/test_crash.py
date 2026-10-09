@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -175,7 +176,7 @@ def test_symbolize_without_image_says_why():
 def test_addr2line_from_cmake_cache(tmp_path):
     img = tmp_path / "build"
     img.mkdir()
-    tool = img / "arm-zephyr-eabi-addr2line"
+    tool = img / ("arm-zephyr-eabi-addr2line" + (".exe" if sys.platform == "win32" else ""))
     tool.write_text("")
     gdb = img / "arm-zephyr-eabi-gdb"
     (img / "CMakeCache.txt").write_text(f"CMAKE_GDB:FILEPATH={gdb}\n")
@@ -183,7 +184,8 @@ def test_addr2line_from_cmake_cache(tmp_path):
 
 
 @pytest.mark.skipif(
-    not (shutil.which("gcc") and shutil.which("addr2line")), reason="needs gcc and addr2line"
+    sys.platform != "linux" or not (shutil.which("gcc") and shutil.which("addr2line")),
+    reason="needs gcc and addr2line building ELF files",
 )
 def test_symbolize_with_real_addr2line(tmp_path):
     src = tmp_path / "main.c"
