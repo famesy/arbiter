@@ -345,6 +345,26 @@ def cmd_read(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_decode(args: argparse.Namespace) -> int:
+    c = Client()
+    body = {
+        "lease_token": _lease(c, args),
+        "channel": args.channel,
+        "since": "all" if args.all else "boot",
+    }
+    if args.build:
+        body["build_dir"] = str(Path(args.build).resolve())
+    res = c.post("/api/console/decode", body)
+    if args.json:
+        _print(res, True)
+    else:
+        if res.get("untrusted_device_output"):
+            print(res["untrusted_device_output"])
+        if res.get("error"):
+            print(f"error: {res['error']}", file=sys.stderr)
+    return 0 if res.get("ok") else 1
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
     if not cmd:
@@ -800,6 +820,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--last-good", action="store_true", help="last passing run and what changed")
     sp.add_argument("--build", help="with --last-good: diff Kconfig against this build")
+    sp = add("decode-log", cmd_decode, "decode dictionary logging captured since the last flash")
+    sp.add_argument("--build", help="the flashed build dir, if arbiter didn't flash it")
+    sp.add_argument("--channel")
+    sp.add_argument(
+        "--all", action="store_true", help="decode the whole buffer, not since the last flash/reset"
+    )
+    sp.add_argument("--lease")
     sp = add("at", cmd_at, "nRF91: send one AT command to the modem through your board's app")
     sp.add_argument("cmd")
     sp.add_argument("--timeout", type=float, default=10)

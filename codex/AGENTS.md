@@ -26,6 +26,7 @@ The dev boards on this machine are shared with other agents and a human. The
 - Pass absolute `build_dir` paths to `flash`. Long operations return an
   `op_id`; poll `run_status(op_id)`.
 - Filter noisy logs with `console_read(level="wrn", module="app,-bt_*", grep=...)`.
+- Dictionary logging (binary/hex log output): `decode_log()` decodes it.
 - Run Zephyr shell commands with `shell_exec(cmd=...)`: it returns just the
   output once the prompt is back.
 - `image_info(build_dir)` summarises a build; `last_good(test=...)` says when

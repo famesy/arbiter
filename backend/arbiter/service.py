@@ -27,6 +27,9 @@ from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, imag
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
 from .coredump import analyze, find_tools
 from .crash import REPEAT_WINDOW_S, Crash, CrashWatcher, image_info, symbolize
+from .dictlog import Tools as DictlogTools
+from .dictlog import decode as decode_dictlog
+from .dictlog import find_tools as dictlog_tools
 from .drivers import discovery
 from .drivers.base import BoardDriver
 from .errors import ArbiterError
@@ -154,6 +157,7 @@ class BoardRuntime:
     debug: DebugSession | None = None  # gdb attached through the board's GDB server
     debug_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     trace: dict[str, Any] | None = None  # a modem trace capture in progress
+    boot_mark: dict[str, int] = field(default_factory=dict)  # channel ends at the last flash/reset
 
 
 class Arbiter:
@@ -1118,6 +1122,7 @@ class Arbiter:
     def _mark(self, lease: sch.Lease, rt: BoardRuntime) -> None:
         """serial_expect(since="mark") searches from here: set at grant, flash, reset and power."""
         self.marks[lease.token] = rt.hub.ends()
+        rt.boot_mark = rt.hub.ends()
 
     def console_read(
         self,
@@ -1184,6 +1189,50 @@ class Arbiter:
             others = rt.hub.new_lines(mine, exclude={rt.hub.primary, "uart:tfm"})
             if others:
                 out["also_active"] = ", ".join(f"{n} ({c} new lines)" for n, c in others.items())
+        return out
+
+    @staticmethod
+    def _dictlog_tools(rt: BoardRuntime, build_dir: str | None) -> DictlogTools | str:
+        if build_dir:
+            top = Path(build_dir).resolve()
+            dirs = image_dirs(top)
+            if not dirs:
+                raise ArbiterError("BAD_REQUEST", f"{build_dir} is not a Zephyr build")
+            return dictlog_tools(dirs[0][1], top)
+        if rt.image is None:
+            raise ArbiterError(
+                "BAD_REQUEST", "arbiter didn't flash this board: pass the build_dir you flashed"
+            )
+        return dictlog_tools(Path(rt.image["image_dir"]), Path(rt.image["build_dir"]))
+
+    async def decode_log(
+        self,
+        session_id: str | None,
+        token: str,
+        build_dir: str | None = None,
+        channel: str | None = None,
+        since: str = "boot",
+    ) -> dict[str, Any]:
+        """Dictionary logging: decode what the channel captured since the last flash, reset
+        or power cycle ("boot"), your expect mark ("mark") or the whole buffer ("all"),
+        with the build's log_dictionary.json."""
+        lease, rt = self._check(token, session_id)
+        tools = await asyncio.to_thread(self._dictlog_tools, rt, build_dir)
+        if isinstance(tools, str):
+            return {"ok": False, "error": tools}
+        name = rt.hub.resolve(channel)
+        ch = rt.hub.channels.get(name)
+        if ch is None:
+            raise ArbiterError("BAD_REQUEST", f"no channel {name!r}")
+        if since not in ("boot", "mark", "all"):
+            raise ArbiterError("BAD_REQUEST", "since is boot, mark or all")
+        marks = {"boot": rt.boot_mark, "mark": self.marks.get(token, {}), "all": {}}[since]
+        start = marks.get(name, 0)
+        data = ch.since(start)
+        work = self._lease_dir(lease) / f"dictlog-{time.strftime('%H%M%S')}"
+        out = await asyncio.to_thread(decode_dictlog, data, tools, work)
+        out["channel"] = name
+        out["note"] = UNTRUSTED
         return out
 
     async def expect(
