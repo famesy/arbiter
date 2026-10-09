@@ -33,6 +33,8 @@ from .errors import ArbiterError
 from .gdb import DebugSession
 from .history import History, compare, named_tests
 from .imageinfo import describe_build, fingerprint, git_state
+from .logfilter import LogFilter
+from .logfilter import apply as log_filter
 from .nrf91 import FINAL_RX, STATUS_COMMANDS, check_at, convert_trace, response, summarize
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
@@ -1124,8 +1126,17 @@ class Arbiter:
         cursor: int | None = None,
         max_bytes: int = 8192,
         channel: str | list[str] | None = None,
+        level: str | None = None,
+        module: str | None = None,
+        grep: str | None = None,
     ) -> dict[str, Any]:
+        """Output since your last read. level / module / grep filter Zephyr log lines
+        (logfilter.py); the cursor still moves past what was filtered out."""
         _lease, rt = self._check(token, session_id)
+        try:
+            filt = LogFilter.make(level, module, grep)
+        except ValueError as e:
+            raise ArbiterError("BAD_REQUEST", str(e)) from None
         names = [ALL] if channel == ALL else rt.hub.resolve_many(channel)
         mine = self.cursors.setdefault(token, {})
         out: dict[str, Any] = {"note": UNTRUSTED}
@@ -1136,13 +1147,21 @@ class Arbiter:
                 if cursor is not None and len(names) == 1
                 else mine.get(name, self.marks.get(token, {}).get(name, 0))
             )
-            data, nxt, dropped = rt.hub.read(start, min(max_bytes, 65536), name)
+            size = min(max_bytes * (4 if filt else 1), 65536)
+            data, nxt, dropped = rt.hub.read(start, size, name)
+            text = data.decode(errors="replace")
+            stats: dict[str, Any] | None = None
+            if filt:
+                text, used, stats = log_filter(data, filt, final=False)
+                nxt = nxt - len(data) + used
             mine[name] = nxt
             entry: dict[str, Any] = {
-                "untrusted_device_output": data.decode(errors="replace"),
+                "untrusted_device_output": text,
                 "cursor": nxt,
                 "more": nxt < rt.hub.end(name),
             }
+            if stats is not None:
+                entry["filter"] = stats
             if dropped:
                 entry["dropped_bytes"] = dropped
             crashes = [

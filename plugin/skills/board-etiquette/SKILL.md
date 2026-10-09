@@ -95,6 +95,9 @@ from the build config (RTT only when `CONFIG_RTT_CONSOLE=y` and
 - `console_read(channel="all")` interleaves every channel with a `[name]`
   prefix per line. `serial_expect(channel="any")` matches whichever channel
   prints first.
+- Noisy logs? `console_read(level="wrn")` keeps only `<err>` and `<wrn>`
+  lines, `module="bt_*,-bt_hci"` picks modules, `grep="..."` any regex. The
+  reply also counts errors and warnings per module.
 - RTT keeps the previous run's text across a reset. Rely on `serial_expect`
   with the default `since="mark"` rather than reading old buffer contents.
 
