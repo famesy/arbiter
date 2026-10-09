@@ -265,6 +265,35 @@ def cmd_hung(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_info(args: argparse.Namespace) -> int:
+    _print(
+        Client().post("/api/image-info", {"build_dir": str(Path(args.build_dir).resolve())}), True
+    )
+    return 0
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    c = Client()
+    if args.last_good:
+        body = {"test": args.test, "board": args.board, "cwd": str(Path.cwd())}
+        if args.build:
+            body["build_dir"] = str(Path(args.build).resolve())
+        _print(c.post("/api/history/last-good", body), True)
+        return 0
+    res = c.get("/api/history", board=args.board or "", test=args.test or "", limit=args.limit)
+    if args.json:
+        _print(res, True)
+        return 0
+    for e in res["entries"]:
+        when = time.strftime("%m-%d %H:%M", time.localtime(e["at"]))
+        what = " ".join(e.get("tests") or []) or e.get("build_dir") or e.get("cmd") or ""
+        print(
+            f"{when} {e['board']:<14} {e['kind']:<5} {'ok ' if e['ok'] else 'BAD'} "
+            f"{e.get('verdict') or '':<24} {what}"
+        )
+    return 0
+
+
 def cmd_read(args: argparse.Namespace) -> int:
     c = Client()
     res = c.post(
@@ -722,6 +751,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("hung", cmd_hung, "halt your board, show where it is stuck, and let it run on")
     sp.add_argument("--build", help="the flashed build dir, if arbiter didn't flash it")
     sp.add_argument("--lease")
+    sp = add("info", cmd_info, "what a build contains: board, images, Kconfig, memory, git")
+    sp.add_argument("build_dir")
+    sp = add("history", cmd_history, "recent flashes and test runs, or the last good one")
+    sp.add_argument("--board")
+    sp.add_argument("--test", help="filter by test path or name")
+    sp.add_argument("--limit", type=int, default=20)
+    sp.add_argument("--last-good", action="store_true", help="last passing run and what changed")
+    sp.add_argument("--build", help="with --last-good: diff Kconfig against this build")
     sp = add("write", cmd_write, "send a line to the console")
     sp.add_argument("data")
     sp.add_argument("--lease")

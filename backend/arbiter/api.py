@@ -297,6 +297,18 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     async def inspect_hung(ctx: Ctx, body: Body) -> Any:
         return await arb.inspect_hung(sid(ctx), body["lease_token"], body.get("build_dir"))
 
+    async def image_info(ctx: Ctx, body: Body) -> Any:
+        return await arb.image_info(body["build_dir"])
+
+    async def history(ctx: Ctx, body: Body) -> Any:
+        q = ctx["query"]
+        return arb.history_query(q.get("board"), q.get("test"), int(q.get("limit", 20)))
+
+    async def last_good(ctx: Ctx, body: Body) -> Any:
+        return await arb.last_good(
+            body.get("test"), body.get("board"), body.get("build_dir"), body.get("cwd")
+        )
+
     async def console_detect(ctx: Ctx, body: Body) -> Any:
         return await arb.detect_console(
             sid(ctx), body["lease_token"], body.get("build_dir"), body.get("elf")
@@ -577,6 +589,9 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/console/detect", a(console_detect), methods=["POST"]),
         Route("/api/console/shell", a(console_shell), methods=["POST"]),
         Route("/api/gdb/start", a(gdb_start), methods=["POST"]),
+        Route("/api/image-info", a(image_info), methods=["POST"]),
+        Route("/api/history", a(history), methods=["GET"]),
+        Route("/api/history/last-good", a(last_good), methods=["POST"]),
         Route("/api/gdb/batch", a(gdb_batch), methods=["POST"]),
         Route("/api/gdb/continue", a(gdb_continue), methods=["POST"]),
         Route("/api/gdb/stop", a(gdb_stop), methods=["POST"]),

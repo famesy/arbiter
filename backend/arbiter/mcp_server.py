@@ -359,6 +359,39 @@ async def shell_exec(
 
 
 @mcp.tool()
+async def image_info(build_dir: str) -> dict[str, Any]:
+    """What a build contains, no board needed: board target, sysbuild images, MCUboot/TF-M, partitions,
+    key Kconfig options (console, logging mode, asserts, coredump, thread info), flash/RAM use with the
+    largest symbols, ELF/Kconfig hashes, git state of the app and Zephyr, and warnings."""
+    return await shim.call("/api/image-info", {"build_dir": build_dir})
+
+
+@mcp.tool()
+async def history(
+    board: str | None = None, test: str | None = None, limit: int = 20
+) -> dict[str, Any]:
+    """Recent flashes and test runs through arbiter, newest first: who, verdict, build hashes and git
+    commit. Filter by board or by a test path/name."""
+    return await shim.get("/api/history", board=board or "", test=test or "", limit=limit)
+
+
+@mcp.tool()
+async def last_good(
+    test: str | None = None,
+    board: str | None = None,
+    build_dir: str | None = None,
+    cwd: str | None = None,
+) -> dict[str, Any]:
+    """When did this last work, and what changed since? The newest passing run of `test` (or the
+    newest good flash), plus the Kconfig diff against build_dir and the git commits and files changed
+    since in the app (or cwd)."""
+    return await shim.call(
+        "/api/history/last-good",
+        {"test": test, "board": board, "build_dir": build_dir, "cwd": cwd or _workdir()},
+    )
+
+
+@mcp.tool()
 async def inspect_hung(
     build_dir: str | None = None, lease_token: str | None = None
 ) -> dict[str, Any]:

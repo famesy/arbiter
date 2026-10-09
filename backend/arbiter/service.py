@@ -31,6 +31,8 @@ from .drivers import discovery
 from .drivers.base import BoardDriver
 from .errors import ArbiterError
 from .gdb import DebugSession
+from .history import History, compare, named_tests
+from .imageinfo import describe_build, fingerprint, git_state
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
@@ -170,6 +172,7 @@ class Arbiter:
         self.started_at = time.time()
         self._config_lock = asyncio.Lock()
         self.restart_needed: set[str] = set()  # settings saved but not yet in effect
+        self.history = History(None, cfg.state)
 
     # =================================================================== lifecycle
     async def start(self, persist: bool = True) -> None:
@@ -182,6 +185,7 @@ class Arbiter:
             await self._add_board(bc)
         if self.store:
             self._kill_orphans()
+            self.history = History(self.store, self.cfg.state)
             data = self.store.get("scheduler")
             if data:
                 self.sched.restore(data)
@@ -744,6 +748,7 @@ class Arbiter:
             if crash is not None:
                 res["crash"] = crash.brief()
                 res["hint"] = "The board crashed after the flash. Call last_crash for the report."
+            await self._record_flash(rt, self._who(lease.session_id), Path(build_dir), res)
             rt.hub.annotate(f"[arbiter] flash {'ok' if res.get('ok') else 'FAILED'}")
             return res
 
@@ -788,6 +793,88 @@ class Arbiter:
                 "commands": [],
             }
         return rt.shell
+
+    # ------------------------------------------------------------------ history
+    async def _record_flash(
+        self, rt: BoardRuntime, who: str, build_dir: Path, res: dict[str, Any]
+    ) -> None:
+        try:
+            fp = await asyncio.to_thread(fingerprint, build_dir)
+            cfg_path = await asyncio.to_thread(
+                self.history.save_config, build_dir, fp.get("config_sha")
+            )
+        except OSError as e:
+            log.warning("history: cannot fingerprint %s: %s", build_dir, e)
+            fp, cfg_path = {"build_dir": str(build_dir)}, None
+        if not res.get("ok"):
+            verdict = "flash failed"
+        elif res.get("boot_failed"):
+            verdict = f"boot failed: {res['boot_failed']}"
+        elif res.get("crash"):
+            verdict = f"crashed: {res['crash']['summary']}"
+        elif res.get("boot_confirmed") is False:
+            verdict = "no boot banner"
+        else:
+            verdict = "booted" if res.get("boot_confirmed") else "flashed"
+        self.history.record(
+            {
+                "kind": "flash",
+                "board": rt.cfg.id,
+                "who": who,
+                "ok": verdict in ("booted", "flashed"),
+                "verdict": verdict,
+                "config_path": cfg_path,
+                **fp,
+            }
+        )
+
+    async def _record_run(
+        self, rt: BoardRuntime, who: str, cmd: list[str], cwd: Path, out: dict[str, Any]
+    ) -> None:
+        app_git = await asyncio.to_thread(git_state, cwd)
+        self.history.record(
+            {
+                "kind": "test",
+                "board": rt.cfg.id,
+                "who": who,
+                "ok": out.get("exit_code") == 0 and not out.get("boot_failed"),
+                "verdict": out.get("verdict"),
+                "cmd": " ".join(cmd)[:400],
+                "tests": named_tests(cmd),
+                "cwd": str(cwd),
+                "junit": out.get("junit"),
+                "app_git": app_git,
+                "image": (rt.image or {}).get("image"),
+            }
+        )
+
+    async def image_info(self, build_dir: str) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(describe_build, Path(build_dir))
+        except FileNotFoundError as e:
+            raise ArbiterError("BAD_REQUEST", str(e)) from None
+
+    def history_query(
+        self, board: str | None = None, test: str | None = None, limit: int = 20
+    ) -> dict[str, Any]:
+        entries = self.history.query(board=board, test=test, limit=max(1, min(int(limit), 100)))
+        return {"entries": [_brief_entry(e) for e in entries]}
+
+    async def last_good(
+        self,
+        test: str | None = None,
+        board: str | None = None,
+        build_dir: str | None = None,
+        cwd: str | None = None,
+    ) -> dict[str, Any]:
+        entry = self.history.last_good(test, board)
+        if entry is None:
+            what = f"test matching {test!r}" if test else "flash or run"
+            return {"found": False, "hint": f"No passing {what} in arbiter's history yet."}
+        diff = await asyncio.to_thread(
+            compare, entry, Path(build_dir) if build_dir else None, Path(cwd) if cwd else None
+        )
+        return {"found": True, "entry": _brief_entry(entry), "since": diff}
 
     # ------------------------------------------------------------------ crashes
     def _set_image(self, rt: BoardRuntime, build_dir: Path) -> None:
@@ -1433,6 +1520,7 @@ class Arbiter:
                     "--short-build-path to twister, or build from a shorter directory."
                 )
             await self._after_run(rt, out, op, start, outdir)
+            await self._record_run(rt, self._who(lease.session_id), cmd, base, out)
             rt.hub.annotate(f"[arbiter] run finished: {out['verdict']}")
             return out
 
@@ -1805,6 +1893,7 @@ class Arbiter:
         if res.get("ok"):
             res["shell_commands"] = await self._read_shell(rt, Path(build_dir))
             self._set_image(rt, Path(build_dir))
+        await self._record_flash(rt, f"human:{by}", Path(build_dir), res)
         rt.hub.annotate(f"[arbiter] flash {'ok' if res.get('ok') else 'FAILED'}")
         self.sched.human_activity(board_id, f"human:{by}")
         return res
@@ -2055,6 +2144,19 @@ def _shell_lines(text: str) -> list[str]:
     (e.g. "[claude-1a2b] > cmd") or blank lines."""
     text = _VT100.sub("", _NOTE.sub("\n", text)).replace("\r", "")
     return [ln.rstrip() for ln in text.split("\n") if ln.strip()]
+
+
+def _brief_entry(e: dict[str, Any]) -> dict[str, Any]:
+    keep = (
+        "id", "at", "kind", "board", "who", "ok", "verdict", "cmd", "tests", "build_dir",
+        "image", "elf_sha", "config_sha", "junit",
+    )  # fmt: skip
+    out = {k: e[k] for k in keep if e.get(k) is not None}
+    for key in ("app_git", "zephyr_git"):
+        g = e.get(key)
+        if g:
+            out[key] = {"commit": g["commit"][:12], "dirty": g.get("dirty", False)}
+    return out
 
 
 def _tags(bc: BoardConfig) -> list[str]:
