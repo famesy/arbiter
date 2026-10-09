@@ -521,3 +521,38 @@ input.switch:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; 
   .check-row { grid-template-columns: 44px 1fr; }
   .check-row .d { grid-column: 2; }
 }
+
+/* ------------------------------------------------------------------ settings: editing */
+.board-set-head .spacer { flex: 1; }
+.board-set.editing { border-color: var(--fg); }
+.section-actions { display: flex; justify-content: flex-end; margin: calc(-1 * var(--s6)) 0 var(--s3); }
+.edit-form { display: flex; flex-direction: column; gap: var(--s5); }
+.edit-form .alert { margin: 0; }
+.efields { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--s4) var(--s5); }
+.efield { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.efield.wide { grid-column: 1 / -1; }
+.efield .label { font-size: 12px; color: var(--muted); display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+.efield .tag { font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+.efield .tag.restart { color: var(--muted); border-color: var(--line-strong); }
+.efield input[type=text], .efield input[type=number], .efield input:not([type]), .efield select { width: 100%; min-width: 0; }
+.efield .hint { margin-top: 0; color: var(--faint); }
+.efield .ferr:empty { display: none; }
+.efield .ferr { font-size: 12px; color: var(--err-fg); }
+.efield.bad input, .efield.bad select { border-color: var(--err-line); }
+.with-unit { display: flex; align-items: center; gap: var(--s2); }
+.with-unit .unit { color: var(--muted); font-size: 13px; }
+.rows { display: flex; flex-direction: column; gap: var(--s2); align-items: flex-start; }
+.port-row { display: grid; grid-template-columns: 80px minmax(80px, 1fr) 72px minmax(120px, 1.5fr) 96px 30px; gap: var(--s2); width: 100%; align-items: center; }
+.port-row.head span { font-size: 12px; color: var(--faint); }
+.port-row input, .port-row select { width: 100%; min-width: 0; }
+.map-row { display: grid; grid-template-columns: minmax(100px, 180px) 1fr 30px; gap: var(--s2); width: 100%; }
+.map-row input { width: 100%; min-width: 0; }
+.form-errs { display: flex; flex-direction: column; gap: var(--s2); }
+.form-errs:empty { display: none; }
+.form-actions { padding-top: var(--s4); border-top: 1px solid var(--line); }
+.form-actions .danger { margin-left: auto; }
+@media (max-width: 600px) {
+  .port-row { grid-template-columns: 1fr 1fr; }
+  .port-row.head { display: none; }
+  .section-actions { margin-top: 0; justify-content: flex-start; }
+}
