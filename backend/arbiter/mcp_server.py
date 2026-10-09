@@ -345,6 +345,20 @@ async def serial_write(
 
 
 @mcp.tool()
+async def shell_exec(
+    cmd: str, timeout_s: float = 10, channel: str | None = None, lease_token: str | None = None
+) -> dict[str, Any]:
+    """Run one Zephyr shell command on your board and return just its output (no echo, colours or
+    prompt), once the next prompt appears. Unknown commands are refused without touching the board,
+    with suggestions. Prefer this over serial_write + serial_expect for shell commands."""
+    return await shim.call(
+        "/api/console/shell",
+        {"lease_token": lease_token, "cmd": cmd, "timeout_s": timeout_s, "channel": channel},
+        need_lease=True,
+    )
+
+
+@mcp.tool()
 async def run(
     cmd: list[str] | str,
     cwd: str | None = None,
