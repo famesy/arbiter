@@ -5,3 +5,5 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 pre-commit==4.6.2
 types-psutil==7.2.2.20260906
+# `arbiter tui` (the tui extra), so mypy and the tests see it
+textual==8.2.8

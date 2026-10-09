@@ -385,6 +385,23 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    """The board console in this terminal, with keys to take over, pause and see the queue."""
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        raise ArbiterError(
+            "NOT_SUPPORTED",
+            "the terminal UI needs Textual",
+            hint="Install it with: pip install 'arbiter[tui]' (or pip install textual).",
+        ) from None
+    from .client import ensure_daemon
+    from .tui import run
+
+    ensure_daemon()
+    return run(args.board, args.channel)
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     from .hooks import run_hook
 
@@ -626,6 +643,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--domain")
     sp = add("dashboard", cmd_dashboard, "open the dashboard")
     sp.add_argument("--no-open", action="store_true")
+    sp = add("tui", cmd_tui, "the board console in this terminal (needs the tui extra)")
+    sp.add_argument("board", nargs="?", help="board to show first")
+    sp.add_argument("--channel", default="all", help="console channel (default: all)")
     # human controls
     for action, h in (
         ("pause", "pause the agent on a board"),
