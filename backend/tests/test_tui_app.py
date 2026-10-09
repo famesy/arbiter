@@ -140,7 +140,12 @@ async def test_mouse(daemon, build_dir):
         # The queue opens from the status line; its buttons and a click outside work.
         await pilot.click("#status", offset=(29, 0))  # "queue 0"
         await until(pilot, lambda: isinstance(app.screen, QueuePopup))
-        await pilot.click("#dismiss")
+        # Click only once the popup is laid out: on a slow runner the button can still
+        # have no region right after the screen is pushed, and the click lands elsewhere.
+        close = app.screen.query_one("#dismiss")
+        await until(pilot, lambda: close.region.height > 0)
+        await pilot.pause()
+        assert await pilot.click(close)
         await until(pilot, lambda: not app.screen.is_modal)
 
         # The footer keys are buttons too: F5 takes the board.
