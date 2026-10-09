@@ -145,7 +145,21 @@ def from_elf(path: Path) -> ShellCommands:
         cmds = _Reader(elf).roots()
     except ElfError as e:
         return ShellCommands(False, f"cannot read shell commands: {e}", elf=str(path))
+    if not cmds:
+        # Zephyr's linker script defines the section bounds whether or not the shell is
+        # built in, so an image without a shell has an empty section, not a missing one.
+        return ShellCommands(False, "the image has no shell", elf=str(path))
     return ShellCommands(True, elf=str(path), commands=cmds)
+
+
+def shell_disabled(zephyr_dir: Path) -> bool:
+    """The image's .config shows it was built without CONFIG_SHELL. False when there is no
+    .config to tell, so a missing file never invents a reason."""
+    try:
+        text = (zephyr_dir / ".config").read_text(errors="replace")
+    except OSError:
+        return False
+    return "CONFIG_SHELL=y" not in text.splitlines()
 
 
 def from_build(build_dir: Path) -> ShellCommands:
@@ -159,5 +173,14 @@ def from_build(build_dir: Path) -> ShellCommands:
         if elf.exists():
             res = from_elf(elf)
             res.image = image
+            if not res.available and shell_disabled(d / "zephyr"):
+                res.reason = "the image was built without CONFIG_SHELL"
             return res
-    return ShellCommands(False, "no zephyr.elf in the build", image=image)
+    return ShellCommands(False, f"no zephyr.elf in {d / 'zephyr'}", image=image)
+
+
+def normalize(record: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A stored record from before empty command tables counted as no shell."""
+    if record and record.get("available") and not record.get("commands"):
+        record = {**record, "available": False, "reason": "the image has no shell"}
+    return record
