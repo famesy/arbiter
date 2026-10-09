@@ -1,4 +1,4 @@
-import { Sheet, QueueTable, PowerPanel, TestRunsTable, EventRow, StatStrip, Sparkline, Check, Button, KV, h } from "../index.js";
+import { Sheet, QueueTable, PowerPanel, TestRunsTable, EventRow, StatStrip, Sparkline, Check, Button, KeyValues, h } from "../index.js";
 
 export default { title: "Components/Panels" };
 
@@ -58,7 +58,7 @@ export const SheetDialog = {
 };
 
 export const InfoSheet = {
-  render: () => h("div", { style: "min-height:420px;padding-top:24px" }, Sheet({ open: true, title: "nrf9161dk-1", children: KV({ rows: [
+  render: () => h("div", { style: "min-height:420px;padding-top:24px" }, Sheet({ open: true, title: "nrf9161dk-1", children: KeyValues({ rows: [
     ["Platform", h("span", { class: "mono" }, "nrf9161dk/nrf9161/ns")], ["Probe", h("span", { class: "mono" }, "1050978819")],
     ["Console", "UART (.config)"], ["Last flash", "boot confirmed"], ["Shell", "48 commands"], ["Tags", "lte, modem"],
   ] }) })),

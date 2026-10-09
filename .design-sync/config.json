@@ -1,0 +1,80 @@
+{
+  "pkg": "@arbiter/ui-react",
+  "globalName": "ArbiterUI",
+  "shape": "storybook",
+  "storybookConfigDir": "ui/react/.storybook",
+  "storybookStatic": ".design-sync/sb-reference",
+  "buildCmd": "cd ui/react && npm ci && npm run build",
+  "cssEntry": "dist/style.css",
+  "titleMap": {
+    "Dashboard": null
+  },
+  "overrides": {
+    "Alert": {
+      "cardMode": "column"
+    },
+    "BoardBar": {
+      "cardMode": "column"
+    },
+    "BoardSettings": {
+      "cardMode": "column"
+    },
+    "CheckRow": {
+      "cardMode": "column"
+    },
+    "CommandBar": {
+      "cardMode": "column"
+    },
+    "EventRow": {
+      "cardMode": "column"
+    },
+    "Guide": {
+      "cardMode": "column"
+    },
+    "GuideRow": {
+      "cardMode": "column"
+    },
+    "Issue": {
+      "cardMode": "column"
+    },
+    "PowerPanel": {
+      "cardMode": "column"
+    },
+    "QueueRow": {
+      "cardMode": "column"
+    },
+    "QueueTable": {
+      "cardMode": "column"
+    },
+    "Section": {
+      "cardMode": "column"
+    },
+    "Sheet": {
+      "cardMode": "column"
+    },
+    "StatStrip": {
+      "cardMode": "column"
+    },
+    "Suggestions": {
+      "cardMode": "column"
+    },
+    "TermCard": {
+      "cardMode": "column"
+    },
+    "Terminal": {
+      "cardMode": "column"
+    },
+    "TestRunRow": {
+      "cardMode": "column"
+    },
+    "TestRunsTable": {
+      "cardMode": "column"
+    },
+    "Toast": {
+      "cardMode": "column"
+    },
+    "ToggleRow": {
+      "cardMode": "column"
+    }
+  }
+}

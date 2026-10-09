@@ -1,4 +1,4 @@
-import { BoardCard, ProbeChip, AgentRow, BoardBar, BoardActions, HolderRow, Chip, ChipStrip, KV, Button, h } from "../index.js";
+import { BoardCard, ProbeChip, AgentRow, BoardBar, BoardActions, HolderRow, Chip, ChipStrip, KeyValues, Button, h } from "../index.js";
 import { boards, chips, leasedActions, leasedHolder } from "./sample.js";
 
 export default { title: "Components/Board" };
@@ -66,7 +66,7 @@ export const Chips = {
 };
 
 export const Info = {
-  render: () => h("div", { class: "card", style: "max-width:520px" }, KV({ rows: [
+  render: () => h("div", { class: "card", style: "max-width:520px" }, KeyValues({ rows: [
     ["Platform", h("span", { class: "mono" }, "nrf9161dk/nrf9161/ns")],
     ["Probe", h("span", { class: "mono" }, "1050978819")],
     ["Ports", h("span", { class: "mono" }, "/dev/ttyACM0, /dev/ttyACM1")],

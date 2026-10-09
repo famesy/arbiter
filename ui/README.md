@@ -41,11 +41,14 @@ per variant.
 | `brand.js` | Logo, Brand |
 | `controls.js` | Button, ButtonRow, Menu, CheckMenu, Tabs, NavTabs, Switch, ToggleRow, Check |
 | `status.js` | Pill, ConnPill, Tag, Alert, Issue, Toast, Empty |
-| `board.js` | BoardCard, ProbeChip, AgentRow, HolderRow, Chip, ChipStrip, BoardActions, BoardBar, KV |
+| `board.js` | BoardCard, ProbeChip, AgentRow, HolderRow, Chip, ChipStrip, BoardActions, BoardBar, KeyValues |
 | `terminal.js` | Terminal, TermLine, BootBlock, Suggestions, CommandBar, TermCard |
 | `panels.js` | Sheet, QueueRow, QueueTable, Stat, StatStrip, Sparkline, PowerPanel, TestRunRow, TestRunsTable, EventRow |
 | `guide.js` | Guide, GuideContent, GuideList, GuideRow, Tally, CmdBox, TourItem |
 | `settings.js` | Section, Field, FieldGroup, CheckRow, BoardSettings |
+
+[`react/`](react/) has React versions of the same components for Claude Design, with their own
+Storybook. A test keeps the two rendering the same HTML.
 
 `Pages/Dashboard` puts them together as the terminal-first dashboard. The `Docs` pages at the
 top of the sidebar explain the colors, type and spacing, and how to use and add components.

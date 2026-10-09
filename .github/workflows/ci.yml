@@ -90,3 +90,20 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build-storybook
+
+  ui-react:
+    name: UI components for Claude Design (React)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui/react
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/react/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build-storybook
