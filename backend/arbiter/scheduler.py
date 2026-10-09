@@ -72,9 +72,10 @@ class Selector:
                 return cls(board_id=obj)
             return cls(platform=obj)
         if isinstance(obj, dict):
-            tags = obj.get("tags") or []
-            if isinstance(tags, str):
-                tags = [t for t in tags.split(",") if t]
+            tags: list[str] = []
+            for key in ("tags", "fixtures"):  # fixtures are tags too (see BoardConfig)
+                value = obj.get(key) or []
+                tags += [t for t in value.split(",") if t] if isinstance(value, str) else value
             return cls(
                 board_id=obj.get("board_id") or obj.get("board"),
                 platform=obj.get("platform"),

@@ -36,6 +36,9 @@ device = "nRF9161_xxCA"          # J-Link device name, used for RTT
 tags = ["lte"]
 console = "auto"                 # auto reads the build's .config: rtt | uart
 allow_agent_erase = false        # erase and recover always ask the human first
+# Wiring this board has, for twister's `harness_config: fixture:` (also usable as tags).
+# fixtures = ["gpio_loopback", "sim_card"]
+# runner_params = []             # extra args twister passes to the west runner
 
 # VCOM ports are matched by nrfutil's vcom index, so COM numbers can change.
 [[board.port]]

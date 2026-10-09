@@ -207,6 +207,23 @@ def cmd_write(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_exec(args: argparse.Namespace) -> int:
+    c = Client()
+    res = c.post(
+        "/api/console/shell",
+        {"lease_token": _lease(c, args), "cmd": args.cmd, "timeout_s": args.timeout},
+    )
+    if args.json:
+        _print(res, True)
+    else:
+        if res.get("untrusted_device_output"):
+            print(res["untrusted_device_output"])
+        for key in ("error", "hint"):
+            if res.get(key):
+                print(f"{key}: {res[key]}", file=sys.stderr)
+    return 0 if res.get("prompt_seen") and not res.get("error") else 1
+
+
 def cmd_read(args: argparse.Namespace) -> int:
     c = Client()
     res = c.post(
@@ -651,6 +668,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("regex")
     sp.add_argument("--timeout", type=float, default=10)
     sp.add_argument("--since", default="mark")
+    sp.add_argument("--lease")
+    sp = add("exec", cmd_exec, "run one shell command on your board and print its output")
+    sp.add_argument("cmd")
+    sp.add_argument("--timeout", type=float, default=10)
     sp.add_argument("--lease")
     sp = add("write", cmd_write, "send a line to the console")
     sp.add_argument("data")
