@@ -321,6 +321,23 @@ async def console_read(
 
 
 @mcp.tool()
+async def decode_log(
+    build_dir: str | None = None,
+    channel: str | None = None,
+    since: str = "boot",
+    lease_token: str | None = None,
+) -> dict[str, Any]:
+    """Dictionary logging (CONFIG_LOG_DICTIONARY_SUPPORT): the console carries binary or hex records,
+    not text. Decodes what the channel captured since the last flash/reset (since="mark": since your
+    last serial_expect match; "all": the whole buffer) with the build's log_dictionary.json and Zephyr's log_parser.py."""
+    return await shim.call(
+        "/api/console/decode",
+        {"lease_token": lease_token, "build_dir": build_dir, "channel": channel, "since": since},
+        need_lease=True,
+    )
+
+
+@mcp.tool()
 async def serial_expect(
     regex: str,
     timeout_s: float = 10,

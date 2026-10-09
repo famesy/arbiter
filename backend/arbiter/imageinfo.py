@@ -205,6 +205,8 @@ def warnings(cfg: dict[str, str], info: dict[str, Any]) -> list[str]:
             "Logging is deferred: lines just before a crash can be lost. Use "
             "CONFIG_LOG_MODE_IMMEDIATE=y while debugging."
         )
+    if "CONFIG_LOG_DICTIONARY_SUPPORT" in on:
+        w.append("Dictionary logging is on: log lines arrive encoded. Read them with decode_log.")
     if "CONFIG_ASSERT" not in on:
         w.append("CONFIG_ASSERT is off: __ASSERT checks are compiled out.")
     if "CONFIG_RTT_CONSOLE" in on and "CONFIG_UART_CONSOLE" in on:

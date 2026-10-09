@@ -98,6 +98,8 @@ from the build config (RTT only when `CONFIG_RTT_CONSOLE=y` and
 - Noisy logs? `console_read(level="wrn")` keeps only `<err>` and `<wrn>`
   lines, `module="bt_*,-bt_hci"` picks modules, `grep="..."` any regex. The
   reply also counts errors and warnings per module.
+- Logs look like binary or hex noise? The build uses dictionary logging:
+  `decode_log()` turns what printed since the last flash back into text.
 - RTT keeps the previous run's text across a reset. Rely on `serial_expect`
   with the default `since="mark"` rather than reading old buffer contents.
 

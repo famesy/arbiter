@@ -249,6 +249,15 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             body.get("grep"),
         )
 
+    async def console_decode(ctx: Ctx, body: Body) -> Any:
+        return await arb.decode_log(
+            sid(ctx),
+            body["lease_token"],
+            body.get("build_dir"),
+            body.get("channel"),
+            body.get("since", "boot"),
+        )
+
     async def console_expect(ctx: Ctx, body: Body) -> Any:
         return await arb.expect(
             sid(ctx),
@@ -598,6 +607,7 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/reset", a(reset), methods=["POST"]),
         Route("/api/recover", a(recover), methods=["POST"]),
         Route("/api/console/read", a(console_read), methods=["POST"]),
+        Route("/api/console/decode", a(console_decode), methods=["POST"]),
         Route("/api/console/expect", a(console_expect), methods=["POST"]),
         Route("/api/console/write", a(console_write), methods=["POST"]),
         Route("/api/console/detect", a(console_detect), methods=["POST"]),
