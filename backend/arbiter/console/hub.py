@@ -19,14 +19,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any, Protocol
 
 from ..errors import ArbiterError
+
+log = logging.getLogger(__name__)
 
 PRIMARY = "console"
 ALL = "all"
@@ -141,6 +145,8 @@ class ConsoleHub:
         self._write_lock = asyncio.Lock()
         self._partial: tuple[Sender, str] | None = None  # a writer mid-line, and its channel
         self._line_done = asyncio.Event()
+        # Called with (channel, bytes, channel end) for device output, e.g. the crash watcher.
+        self.listeners: list[Callable[[str, bytes, int], None]] = []
 
     # ------------------------------------------------------------- channels
     def _channel(self, name: str) -> Channel:
@@ -209,7 +215,13 @@ class ConsoleHub:
         """Called by sources (on the event loop) with bytes from the device."""
         if not data:
             return
-        self._channel(source).append(data)
+        ch = self._channel(source)
+        ch.append(data)
+        for listener in self.listeners:
+            try:
+                listener(source, data, ch.end)
+            except Exception:
+                log.exception("console listener failed on %s", self.board_id)
         if source not in NOT_IN_ALL and source not in BINARY:
             self._all.append(self._tag(data, source))
         if self._notes:

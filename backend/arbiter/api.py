@@ -413,6 +413,15 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     async def shell_commands(ctx: Ctx, body: Body) -> Any:
         return arb.shell_commands(ctx["path"]["board"])
 
+    async def crash(ctx: Ctx, body: Body) -> Any:
+        return arb.last_crash(
+            sid(ctx), body.get("lease_token"), body.get("board"), bool(body.get("history"))
+        )
+
+    async def board_crash(ctx: Ctx, body: Body) -> Any:
+        history = ctx["query"].get("history", "") in ("1", "true", "yes")
+        return arb.last_crash(None, None, ctx["path"]["board"], history)
+
     # ------------------------------------------------------------ websockets
     async def ws_events(ws: WebSocket) -> None:
         lvl = auth.level(_token_from(ws))
@@ -511,6 +520,8 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/state", a(state), methods=["GET"]),
         Route("/api/boards", a(boards), methods=["GET"]),
         Route("/api/boards/{board}/shell", a(shell_commands), methods=["GET"]),
+        Route("/api/boards/{board}/crash", a(board_crash), methods=["GET"]),
+        Route("/api/crash", a(crash), methods=["POST"]),
         Route("/api/plugins", a(plugins), methods=["GET"]),
         Route("/api/sessions", a(register), methods=["POST"]),
         Route("/api/sessions/by-external/{ext}/inbox", a(inbox_ext), methods=["GET", "POST"]),

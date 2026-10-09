@@ -422,6 +422,20 @@ async def recover_board(lease_token: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def last_crash(
+    board: str | None = None, history: bool = False, lease_token: str | None = None
+) -> dict[str, Any]:
+    """The last crash (Zephyr fatal error, fault, assert, stack overflow) seen on your board, or on
+    `board`: fault type, thread, registers, pc/lr as function file:line, the lines before it, and
+    hints. serial_expect and flash point here when the board crashed."""
+    if board:
+        return await shim.get(f"/api/boards/{board}/crash", history="1" if history else "")
+    return await shim.call(
+        "/api/crash", {"lease_token": lease_token, "history": history}, need_lease=True
+    )
+
+
+@mcp.tool()
 async def check_inbox() -> dict[str, Any]:
     """Notices for you: granted, paused, resumed, revoked, lease expiring, approvals."""
     return await shim.get(f"/api/sessions/{shim.session}/inbox")

@@ -140,6 +140,17 @@ one go. If the run left the board unbootable, it keeps the board for you
 instead: flash a working image, then `arbiter release`. Exit codes: `0` OK, `75` still queued (run again to keep your place),
 `76` paused, `77` revoked or expired.
 
+## When the board crashes
+
+arbiter watches every console channel for Zephyr fatal errors (faults,
+asserts, stack overflows, kernel panics, TF-M secure faults). When one
+happens you get a `crash` notice, and a `serial_expect` that times out says
+the board crashed instead of just timing out. Call `last_crash()` for the
+report: fault type, thread, registers, and pc/lr as `function file:line`
+from the ELF you flashed, plus the log lines before it and config hints.
+Read the source at that line before changing anything. `[N times]` in the
+summary means a boot loop.
+
 ## Power and current
 
 Only on boards with a power device (a PPK2 or a controllable supply);

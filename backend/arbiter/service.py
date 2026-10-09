@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import re
 import secrets
 import sys
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +24,7 @@ from . import scheduler as sch
 from .config import BoardConfig, Config, config_from_dict, load_toolchain_env
 from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, image_dirs
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
+from .crash import REPEAT_WINDOW_S, Crash, CrashWatcher, image_info, symbolize
 from .drivers import discovery
 from .drivers.base import BoardDriver
 from .errors import ArbiterError
@@ -135,6 +138,9 @@ class BoardRuntime:
     supported: bool = True
     support_note: str = ""
     shell: dict[str, Any] | None = None  # shell commands of the last flashed image
+    image: dict[str, Any] | None = None  # the last flashed image's ELF (crash symbols)
+    watcher: CrashWatcher | None = None
+    crashes: deque[Crash] = field(default_factory=lambda: deque(maxlen=20))
 
 
 class Arbiter:
@@ -186,6 +192,10 @@ class Arbiter:
         rt = BoardRuntime(bc, driver, hub, power, supported=ok, support_note=why)
         if self.store:
             rt.shell = normalize(self.store.get(f"shell:{bc.id}"))
+            image = self.store.get(f"image:{bc.id}")
+            rt.image = image if isinstance(image, dict) else None
+        rt.watcher = CrashWatcher(bc.id, functools.partial(self._on_crash, rt))
+        hub.listeners.append(rt.watcher.feed)
         self.boards[bc.id] = rt
         slot = self.sched.add_board(bc.id, bc.platform, bc.tags)
         if not ok:
@@ -581,6 +591,8 @@ class Arbiter:
                 d["op"] = le.op
             if b.note:
                 d["note"] = b.note
+            if rt.crashes:
+                d["last_crash"] = rt.crashes[-1].brief()
             if rt.power:
                 desc = rt.power.describe()
                 d["power"] = {
@@ -718,6 +730,11 @@ class Arbiter:
                 res.setdefault("console", rt.driver.console_map.to_dict())
             if res.get("ok"):
                 res["shell_commands"] = await self._read_shell(rt, Path(build_dir))
+                self._set_image(rt, Path(build_dir))
+            crash = self._crash_since(rt, self.marks.get(lease.token, {}))
+            if crash is not None:
+                res["crash"] = crash.brief()
+                res["hint"] = "The board crashed after the flash. Call last_crash for the report."
             rt.hub.annotate(f"[arbiter] flash {'ok' if res.get('ok') else 'FAILED'}")
             return res
 
@@ -762,6 +779,96 @@ class Arbiter:
                 "commands": [],
             }
         return rt.shell
+
+    # ------------------------------------------------------------------ crashes
+    def _set_image(self, rt: BoardRuntime, build_dir: Path) -> None:
+        """Remember which ELF is on the board, so crashes can be symbolised."""
+        try:
+            rt.image = image_info(build_dir.resolve())
+        except OSError:
+            rt.image = None
+        if self.store:
+            self.store.put(f"image:{rt.cfg.id}", rt.image)
+
+    def _on_crash(self, rt: BoardRuntime, crash: Crash) -> None:
+        last = rt.crashes[-1] if rt.crashes else None
+        if (
+            last is not None
+            and last.signature == crash.signature
+            and crash.at - last.last_at < REPEAT_WINDOW_S
+        ):
+            # A boot loop, or RTT replaying the previous run's text: count it, don't re-report.
+            last.repeats += 1
+            last.last_at = crash.at
+            last.cursor = crash.cursor
+            self.bus.publish("board.crash", {"board": rt.cfg.id, "crash": last.brief()})
+            rt.hub.annotate(f"[arbiter] crashed again: {last.summary()}")
+            return
+        rt.crashes.append(crash)
+        self._spawn(self._report_crash(rt, crash))
+
+    async def _report_crash(self, rt: BoardRuntime, crash: Crash) -> None:
+        try:
+            await asyncio.to_thread(symbolize, crash, rt.image)
+        except Exception as e:  # symbols are a bonus: the raw report still goes out
+            log.warning("crash symbolisation failed on %s: %s", rt.cfg.id, e)
+            crash.hints.append(f"symbolisation failed: {e}")
+        if self.store:
+            self.store.put(f"crash:{rt.cfg.id}", crash.to_dict())
+            self.store.audit("board.crash", {"board": rt.cfg.id, "crash": crash.brief()})
+        self.bus.publish("board.crash", {"board": rt.cfg.id, "crash": crash.brief()})
+        rt.hub.annotate(f"[arbiter] crash: {crash.summary()}")
+        slot = self.sched.boards.get(rt.cfg.id)
+        lease = self.sched.leases.get(slot.lease_token or "") if slot else None
+        if lease is not None:
+            self.sched._notify(
+                lease.session_id,
+                "crash",
+                f"{rt.cfg.id} crashed: {crash.summary()}. Call last_crash for the full report.",
+                board=rt.cfg.id,
+                crash_id=crash.id,
+            )
+
+    def _crash_since(
+        self, rt: BoardRuntime, since: dict[str, int] | int, names: list[str] | None = None
+    ) -> Crash | None:
+        """The newest crash whose block starts after `since` on its channel."""
+        if rt.watcher is not None:
+            rt.watcher.flush()
+        for c in reversed(rt.crashes):
+            if names is not None and c.channel not in names:
+                continue
+            start = since.get(c.channel, 0) if isinstance(since, dict) else since
+            if c.cursor >= start:
+                return c
+        return None
+
+    def last_crash(
+        self,
+        session_id: str | None,
+        token: str | None = None,
+        board_id: str | None = None,
+        history: bool = False,
+    ) -> dict[str, Any]:
+        if token:
+            _lease, rt = self._check(token, session_id)
+        elif board_id:
+            rt = self.rt(board_id)
+        else:
+            raise ArbiterError("BAD_REQUEST", "give lease_token or board")
+        if rt.watcher is not None:
+            rt.watcher.flush()
+        if not rt.crashes:
+            return {
+                "board": rt.cfg.id,
+                "crash": None,
+                "hint": "No crash seen on this board since arbiterd started.",
+            }
+        out: dict[str, Any] = {"board": rt.cfg.id, "crash": rt.crashes[-1].to_dict()}
+        out["note"] = UNTRUSTED
+        if history:
+            out["earlier"] = [c.brief() for c in list(rt.crashes)[:-1]][::-1]
+        return out
 
     @staticmethod
     def _shell_reason(rt: BoardRuntime) -> str:
@@ -926,6 +1033,11 @@ class Arbiter:
             }
             if dropped:
                 entry["dropped_bytes"] = dropped
+            crashes = [
+                c.brief() for c in rt.crashes if c.channel == name and start <= c.cursor < nxt
+            ]
+            if crashes:
+                entry["crashes"] = crashes
             if name != ALL:
                 human = self._human_input(rt, start, [name], nxt)
                 if human:
@@ -966,6 +1078,14 @@ class Arbiter:
         res = await self._wait_task(rt, rt.hub.expect(regex, timeout_s, start, names), lease)
         if res["matched"]:
             self.marks.setdefault(token, {})[res["channel"]] = res["cursor"]
+        else:
+            crash = self._crash_since(rt, start)
+            if crash is not None:
+                res["crash"] = crash.brief()
+                res["hint"] = (
+                    f"No match because the board crashed: {crash.summary()}. "
+                    "Call last_crash for the full report."
+                )
         human = self._human_input(
             rt, start, [res["channel"]] if res["matched"] else names, res.get("cursor")
         )
@@ -1461,6 +1581,7 @@ class Arbiter:
                 res["boot_failed"] = boot["failed"]
         if res.get("ok"):
             res["shell_commands"] = await self._read_shell(rt, Path(build_dir))
+            self._set_image(rt, Path(build_dir))
         rt.hub.annotate(f"[arbiter] flash {'ok' if res.get('ok') else 'FAILED'}")
         self.sched.human_activity(board_id, f"human:{by}")
         return res
@@ -1637,6 +1758,7 @@ class Arbiter:
             b["power"] = rt.power.describe() if rt.power else None
             b["op"] = rt.op.public() if rt.op and rt.op.ended is None else None
             b["console_channels"] = {"primary": rt.hub.primary, "ends": rt.hub.ends()}
+            b["last_crash"] = rt.crashes[-1].brief() if rt.crashes else None
             if b["lease"]:
                 b["lease"]["holder"] = self._who(b["lease"]["session_id"])
                 b["lease"]["expires_in_s"] = round(b["lease"]["expires_at"] - snap["now"])

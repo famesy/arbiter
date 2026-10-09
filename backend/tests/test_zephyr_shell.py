@@ -163,6 +163,6 @@ async def test_flash_records_commands_for_the_board(tmp_path):
 async def test_sim_board_offers_its_own_shell(arb, build_dir):
     s, tok = await lease_for(arb)
     res = await done(arb, await arb.flash(s, tok, str(build_dir)))
-    assert res["shell_commands"] == 10
+    assert res["shell_commands"] == 11
     names = [c["name"] for c in arb.shell_commands("sim-1")["commands"]]
     assert names == ["device", "help", "kernel", "sim", "test"]
