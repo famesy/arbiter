@@ -99,7 +99,9 @@ async def run_proc(
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    full_env = {**os.environ, **(env or {})}
+    # Python tools (west, twister) print device output with odd bytes in it; on Windows
+    # their console encoding would be cp1252 and logging raises UnicodeEncodeError.
+    full_env = {"PYTHONIOENCODING": "utf-8", **os.environ, **(env or {})}
     tail: deque[str] = deque(maxlen=tail_lines)
     logf = None
     if log_path:

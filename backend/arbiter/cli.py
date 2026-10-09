@@ -44,15 +44,11 @@ def _session(c: Client, args: argparse.Namespace) -> str:
         known = json.loads(cache.read_text())
     except (OSError, ValueError):
         known = {}
-    s = c.post(
-        "/api/sessions",
-        {
-            "agent_kind": agent_kind(),
-            "external_id": key,
-            "label": args.label or f"cli {Path.cwd().name}",
-            "cwd": str(Path.cwd()),
-        },
-    )
+    body = {"agent_kind": agent_kind(), "external_id": key, "cwd": str(Path.cwd())}
+    if args.label or key not in known:
+        # name the session once, so `cd` between commands doesn't rename it
+        body["label"] = args.label or f"cli {Path.cwd().name}"
+    s = c.post("/api/sessions", body)
     known[key] = s["id"]
     try:
         cache.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +227,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     c = Client(autostart=True)
     _session(c, args)
     acquired = False
+    held = []
     if args.board and not (args.lease or os.environ.get("ARBITER_LEASE")):
+        info = c.get(f"/api/sessions/{c.session}")
+        held = [le["lease_token"] for le in info.get("leases", []) if "lease_token" in le]
+    if len(held) == 1:
+        args.lease = held[0]  # keep the board you already hold; don't release it afterwards
+    elif args.board and not (args.lease or os.environ.get("ARBITER_LEASE")):
         res = c.post(
             "/api/acquire", {"selector": args.board, "reason": args.reason or " ".join(cmd)[:80]}
         )

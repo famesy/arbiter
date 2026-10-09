@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import secrets
 import sys
 import time
@@ -40,6 +41,7 @@ FLASH_DRAIN_S = 60.0
 BOOT_RX = r"\*\*\* Booting (?!MCUboot)[^\n]*?\*\*\*|Booting Zephyr OS|Booting nRF Connect SDK"
 # Older bootloaders print the plain Zephyr banner, then these lines.
 BOOTLOADER_RX = r"Starting bootloader|Bootloader chainload|Jumping to the first image slot"
+RUN_NOTE = "a test run left firmware that does not boot"
 BOOT_FAIL_RX = (
     r"Unable to find bootable image|Image in the primary slot is not valid|No bootable image"
 )
@@ -683,6 +685,7 @@ class Arbiter:
                 )
                 res["boot_confirmed"] = boot["booted"]
                 if boot["booted"]:
+                    self._clear_run_note(rt)
                     # Later serial_expect calls (since="mark") start at this boot's banner.
                     self.marks.setdefault(lease.token, {})[boot["channel"]] = boot["match_start"]
                 elif boot.get("failed"):
@@ -986,8 +989,12 @@ class Arbiter:
             raise ArbiterError("BAD_REQUEST", "cmd is empty")
         cmd = list(cmd)
 
+        twister = any("twister" in Path(c).name for c in cmd[:3])
+        base = Path(cwd) if cwd else Path.cwd()
+
         async def do(op: Op) -> dict[str, Any]:
             hw_map = Path(op.log_path).with_suffix(".hwmap.yaml")
+            start = rt.hub.ends()
             lent = False
             run_env = {
                 **(env or {}),
@@ -1011,12 +1018,14 @@ class Arbiter:
                     run_env["ARBITER_PTY_CMD"] = bridge
                 hw_map.parent.mkdir(parents=True, exist_ok=True)
                 hw_map.write_text(_yaml_list([entry]))
-                if (
-                    inject_twister
-                    and any("twister" in Path(c).name for c in cmd[:3])
-                    and "--hardware-map" not in cmd
-                ):
-                    cmd.extend(["--device-testing", "--hardware-map", str(hw_map)])
+                if inject_twister and twister and "--hardware-map" not in cmd:
+                    if "--device-testing" not in cmd:
+                        cmd.append("--device-testing")
+                    cmd.extend(["--hardware-map", str(hw_map)])
+            if inject_twister and twister and IS_WINDOWS and "--short-build-path" not in cmd:
+                # TF-M refuses build dirs over 90 characters, and twister's own nesting
+                # gets there from almost any --outdir on Windows.
+                cmd.append("--short-build-path")
             rt.hub.annotate(f"[arbiter] {self._who(lease.session_id)} running: {' '.join(cmd)}")
             try:
                 res = await run_proc(
@@ -1033,13 +1042,54 @@ class Arbiter:
                     await rt.driver.start()
             out = res.summary()
             out["verdict"] = _verdict(res.tail, res.exit_code)
-            junit = _find_junit(Path(cwd) if cwd else Path.cwd(), op.started)
+            outdir = _twister_outdir(cmd, base) if twister else None
+            junit = _find_junit(outdir or base / "twister-out", op.started)
             if junit:
                 out["junit"] = str(junit)
+            if any("CMAKE_BINARY_DIR path length" in line for line in res.tail):
+                out["hint"] = (
+                    "The build path is too long for TF-M (90 characters). Pass "
+                    "--short-build-path to twister, or build from a shorter directory."
+                )
+            await self._after_run(rt, out, op, start, outdir)
             rt.hub.annotate(f"[arbiter] run finished: {out['verdict']}")
             return out
 
         return await self._start_op(lease, rt, "test", do, wait_s)
+
+    async def _after_run(
+        self,
+        rt: BoardRuntime,
+        out: dict[str, Any],
+        op: Op,
+        start: dict[str, int],
+        outdir: Path | None,
+    ) -> None:
+        """A test run can flash firmware that doesn't boot (e.g. a twister build without
+        MCUboot on a board whose MCUboot stays at 0x0). Say so in the result and on the
+        board, so the next holder isn't handed a board that silently doesn't start."""
+        failed = None
+        if rt.hub.sources:
+            m = await rt.hub.expect(BOOT_FAIL_RX, 0, start, rt.hub.resolve_many(ANY))
+            failed = m["match"] if m["matched"] else None
+        if failed is None:
+            failed = await asyncio.to_thread(_boot_failure, Path(op.log_path), outdir, op.started)
+        if failed is None:
+            if out.get("exit_code") == 0:
+                self._clear_run_note(rt)
+            return
+        out["boot_failed"] = failed
+        out["warning"] = (
+            f"The bootloader reported {failed!r} during this run: the board is left with "
+            "firmware that does not start. Flash a working image before you release it. For "
+            "twister on nRF91/nRF53 /ns targets, build with -x=SB_CONFIG_BOOTLOADER_MCUBOOT=y."
+        )
+        rt.hub.annotate(f"[arbiter] <wrn> test run left firmware that does not boot: {failed}")
+        self.sched.set_note(rt.cfg.id, f"{RUN_NOTE}: {failed}")
+
+    def _clear_run_note(self, rt: BoardRuntime) -> None:
+        if (self.sched.board(rt.cfg.id).note or "").startswith(RUN_NOTE):
+            self.sched.set_note(rt.cfg.id, None)
 
     def _set_pid(self, op: Op, pid: int) -> None:
         op.pid = pid
@@ -1269,7 +1319,14 @@ class Arbiter:
             await rt.driver.reattach_debug(rt.detached_for_pause)
             rt.detached_for_pause = []
         rt.hub.annotate(f"[arbiter] resumed by {by}")
-        return {"ok": True, "lease": lease.public() if lease else None}
+        b = self.sched.board(board_id)
+        if lease is None and b.lease_token:  # the board went straight to the next in queue
+            lease = self.sched.leases[b.lease_token]
+        out: dict[str, Any] = {"ok": True, "state": self.sched.board_status(b)}
+        if lease:
+            out["holder"] = self._who(lease.session_id)
+            out["lease"] = lease.public()
+        return out
 
     async def take(self, board_id: str, by: str, reason: str = "") -> dict[str, Any]:
         rt = self.rt(board_id)
@@ -1358,6 +1415,8 @@ class Arbiter:
         if res.get("ok") and rt.hub.sources:
             boot = await await_boot(rt.hub, 10, start, [rt.hub.primary])
             res["boot_confirmed"] = boot["booted"]
+            if boot["booted"]:
+                self._clear_run_note(rt)
             if boot.get("failed"):
                 res["boot_failed"] = boot["failed"]
         if res.get("ok"):
@@ -1614,10 +1673,40 @@ def _verdict(tail: list[str], code: int | None) -> str:
     return "passed" if code == 0 else f"failed (exit {code})"
 
 
-def _find_junit(cwd: Path, since: float) -> Path | None:
+def _twister_outdir(cmd: list[str], cwd: Path) -> Path:
+    for i, c in enumerate(cmd):
+        if c in ("-O", "--outdir") and i + 1 < len(cmd):
+            p = Path(cmd[i + 1])
+        elif c.startswith("--outdir="):
+            p = Path(c.split("=", 1)[1])
+        else:
+            continue
+        return p if p.is_absolute() else cwd / p
+    return cwd / "twister-out"
+
+
+def _boot_failure(log_path: Path, outdir: Path | None, since: float) -> str | None:
+    """The bootloader's "no image" line in the run's output or in twister's device logs
+    (on Windows the test owns the console port, so arbiter doesn't see it live)."""
+    rx = re.compile(BOOT_FAIL_RX)
+    files = [log_path]
+    if outdir is not None and outdir.is_dir():
+        for name in ("handler.log", "device.log"):
+            files += [f for f in outdir.rglob(name) if f.stat().st_mtime >= since - 1]
+    for f in files[:200]:
+        try:
+            m = rx.search(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        if m:
+            return m.group(0)
+    return None
+
+
+def _find_junit(outdir: Path, since: float) -> Path | None:
     for cand in (
-        cwd / "twister-out" / "twister_report.xml",
-        cwd / "twister-out" / "twister_suite_report.xml",
+        outdir / "twister_report.xml",
+        outdir / "twister_suite_report.xml",
     ):
         try:
             if cand.exists() and cand.stat().st_mtime >= since - 1:

@@ -22,6 +22,7 @@ class BoardDriver:
     kind = "base"
     #: what the driver can do: flash, reset, halt, recover, console, rtt, run, power
     capabilities: frozenset[str] = frozenset()
+    default_runner = "jlink"  # twister's runner when the board doesn't name one
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
         self.cfg = cfg
@@ -106,7 +107,7 @@ class BoardDriver:
             "platform": self.cfg.platform,
             "id": self.dev_id() or self.cfg.id,
             "product": self.kind,
-            "runner": self.cfg.runner or "jlink",
+            "runner": self.cfg.runner or self.default_runner,
         }
         if serial_pty:
             entry["serial_pty"] = serial_pty
