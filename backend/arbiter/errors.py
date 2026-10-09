@@ -48,6 +48,11 @@ DEFAULT_HINTS = {
     "BOARD_UNKNOWN": "No board matches. Call list_boards to see what exists.",
     "SESSION_UNKNOWN": "Unknown session. Register again.",
     "FORBIDDEN": "Only the human (admin token) can do this.",
+    "BOARD_UNBOOTABLE": (
+        "Your test run left firmware on the board that does not boot. Flash an image that "
+        "boots (for nRF91/nRF53 /ns targets, one built with MCUboot) and check its boot "
+        "banner, then release. Pass force=true only if you can't, and tell the human why."
+    ),
     "CONFIG_CHANGED": "config.toml changed since it was read. Read it again and redo the edit.",
     "CONFIG_INVALID": "The edit was not saved. Fix the listed settings.",
 }
@@ -56,6 +61,7 @@ HTTP_STATUS = {
     "UNAUTHORIZED": 401,
     "FORBIDDEN": 403,
     "CONFIG_CHANGED": 409,
+    "BOARD_UNBOOTABLE": 409,
     "CONFIG_INVALID": 422,
     "BAD_REQUEST": 400,
     "BOARD_UNKNOWN": 404,

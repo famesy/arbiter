@@ -29,6 +29,7 @@ from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
 from .store import EventBus, Store
+from .workspace import zephyr_base_for_run
 from .zephyr_shell import ShellCommands
 
 log = logging.getLogger("arbiter")
@@ -610,10 +611,22 @@ class Arbiter:
         self.sched.cancel(ticket, session_id)
         return {"ok": True}
 
-    def release(self, session_id: str | None, token: str) -> dict[str, Any]:
+    def release(self, session_id: str | None, token: str, force: bool = False) -> dict[str, Any]:
         lease = self.sched.lease(token)
         if session_id and lease.session_id != session_id:
             self.sched.check(token, session_id, touch=False)  # raises if not the holder
+        note = self.sched.board(lease.board_id).note or ""
+        if note.startswith(RUN_NOTE) and lease.state in (sch.ACTIVE, sch.EXPIRING):
+            if not force:
+                raise ArbiterError(
+                    "BOARD_UNBOOTABLE",
+                    f"{lease.board_id}: {note}. Flash a working image before releasing it.",
+                    board=lease.board_id,
+                )
+            if self.store:
+                self.store.audit(
+                    "release.unbootable", {"board": lease.board_id, "by": lease.session_id}
+                )
         return self.sched.release(token)
 
     def extend(self, session_id: str | None, token: str, minutes: float) -> dict[str, Any]:
@@ -989,7 +1002,8 @@ class Arbiter:
             raise ArbiterError("BAD_REQUEST", "cmd is empty")
         cmd = list(cmd)
 
-        twister = any("twister" in Path(c).name for c in cmd[:3])
+        mode = _twister_mode(cmd)
+        twister = mode is not None
         base = Path(cwd) if cwd else Path.cwd()
 
         async def do(op: Op) -> dict[str, Any]:
@@ -1002,7 +1016,12 @@ class Arbiter:
                 "ARBITER_LEASE": token,
                 "ARBITER_HW_MAP": str(hw_map),
             }
-            if rt.driver.kind != "native_sim":
+            uses_west = any(Path(c).stem == "west" for c in cmd[:2])
+            if (uses_west or twister) and "ZEPHYR_BASE" not in run_env:
+                zb = zephyr_base_for_run(cmd, base, getattr(rt.driver, "zephyr_base", None))
+                if zb:
+                    run_env["ZEPHYR_BASE"] = zb  # so west finds its workspace from anywhere
+            if rt.driver.kind != "native_sim" and mode != "query":
                 if IS_WINDOWS:
                     # No PTY on Windows: lend the real COM port to the test for the run.
                     port = getattr(rt.driver, "resolve_app_port", lambda: None)()
@@ -1018,11 +1037,16 @@ class Arbiter:
                     run_env["ARBITER_PTY_CMD"] = bridge
                 hw_map.parent.mkdir(parents=True, exist_ok=True)
                 hw_map.write_text(_yaml_list([entry]))
-                if inject_twister and twister and "--hardware-map" not in cmd:
+                if inject_twister and mode == "test" and "--hardware-map" not in cmd:
                     if "--device-testing" not in cmd:
                         cmd.append("--device-testing")
                     cmd.extend(["--hardware-map", str(hw_map)])
-            if inject_twister and twister and IS_WINDOWS and "--short-build-path" not in cmd:
+            if (
+                inject_twister
+                and mode in ("test", "build")
+                and IS_WINDOWS
+                and "--short-build-path" not in cmd
+            ):
                 # TF-M refuses build dirs over 90 characters, and twister's own nesting
                 # gets there from almost any --outdir on Windows.
                 cmd.append("--short-build-path")
@@ -1046,6 +1070,12 @@ class Arbiter:
             junit = _find_junit(outdir or base / "twister-out", op.started)
             if junit:
                 out["junit"] = str(junit)
+            if any("do you need to run this inside a workspace" in line for line in res.tail):
+                out["hint"] = (
+                    "west could not find its workspace from this directory. Run from inside "
+                    "the west workspace, name a path inside it in the command, or ask the "
+                    "human to set zephyr_base for this board."
+                )
             if any("CMAKE_BINARY_DIR path length" in line for line in res.tail):
                 out["hint"] = (
                     "The build path is too long for TF-M (90 characters). Pass "
@@ -1671,6 +1701,35 @@ def _verdict(tail: list[str], code: int | None) -> str:
         if "PROJECT EXECUTION SUCCESSFUL" in line:
             return "PROJECT EXECUTION SUCCESSFUL"
     return "passed" if code == 0 else f"failed (exit {code})"
+
+
+# twister options that only print something: no build, no device
+TWISTER_QUERY = {
+    "-h",
+    "--help",
+    "--version",
+    "--list-platforms",
+    "--list-tests",
+    "--list-tags",
+    "--list-test-duplicates",
+    "--test-tree",
+    "-E",
+    "--save-tests",
+}
+TWISTER_BUILD_ONLY = {"-b", "--build-only", "--cmake-only"}
+
+
+def _twister_mode(cmd: list[str]) -> str | None:
+    """None when `cmd` isn't twister; "query" when it only lists or prints; "build" when it
+    builds without running; "test" when it runs tests on the device."""
+    if not any("twister" in Path(c).name for c in cmd[:3]):
+        return None
+    flags = {c.split("=", 1)[0] for c in cmd if c.startswith("-")}
+    if flags & TWISTER_QUERY:
+        return "query"
+    if flags & TWISTER_BUILD_ONLY:
+        return "build"
+    return "test"
 
 
 def _twister_outdir(cmd: list[str], cwd: Path) -> Path:

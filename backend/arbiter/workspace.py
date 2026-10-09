@@ -65,3 +65,30 @@ def west_context(
     env = {"ZEPHYR_BASE": str(base)} if base else {}
     run_in = cwd if west_topdir(cwd) else west_topdir(base)
     return env, run_in or cwd
+
+
+def zephyr_base_for_run(cmd: list[str], cwd: Path | None, known: str | None) -> str | None:
+    """ZEPHYR_BASE for a test command (west twister, ...) run from `cwd`, when west can't
+    find a workspace from `cwd` itself: the one the board last flashed with or is
+    configured with, the daemon's environment, or the workspace holding a path named in
+    the command (e.g. `-T C:/ncs/v3.4.1/zephyr/samples/hello_world`)."""
+    if west_topdir(cwd):
+        return None  # west finds its workspace on its own
+    if known:
+        return known
+    if os.environ.get("ZEPHYR_BASE"):
+        return os.environ["ZEPHYR_BASE"]
+    for arg in cmd[1:]:
+        value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg
+        if value.startswith("-") or not value:
+            continue
+        p = Path(value)
+        if not p.is_absolute() and cwd is not None:
+            p = cwd / p
+        try:
+            top = west_topdir(p) if p.exists() else None
+        except OSError:
+            top = None
+        if top and (top / "zephyr").is_dir():
+            return str(top / "zephyr")
+    return None

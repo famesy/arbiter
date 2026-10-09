@@ -16,6 +16,9 @@ The dev boards on this machine are shared with other agents and a human. The
   `wait_for_board(ticket)` now and then (at most 45 s per call; your place is
   kept, but a ticket not polled for about 90 s expires).
 - Call `release_board` as soon as hardware work is done, also after failures.
+  Leave the board booting: if a `run` result has `boot_failed`, `release_board`
+  refuses with `BOARD_UNBOOTABLE` until you flash an image that boots. Use
+  `force=true` only when you can't, and tell the user why.
 - On `LEASE_PAUSED` or `LEASE_REVOKED`, stop hardware work and don't retry in a
   loop. Work on code or call `wait_for_board`. `check_inbox` lists notices.
 - `NEEDS_APPROVAL` means the human must approve (erase, recover, higher
@@ -28,7 +31,9 @@ The dev boards on this machine are shared with other agents and a human. The
 - Hardware integration tests run from your session through arbiter, not in CI:
   acquire the board, then `run(cmd=["west", "twister", "--device-testing",
   "-p", "<board>", "-T", "<tests>"])` (arbiter adds a hardware map with only
-  your board), or `run(cmd=["pytest", ...])` with `ARBITER_BOARD`,
+  your board; add `-x=SB_CONFIG_BOOTLOADER_MCUBOOT=y` on nRF91/nRF53 `/ns`
+  targets; list/help options such as `--list-platforms` run untouched), or
+  `run(cmd=["pytest", ...])` with `ARBITER_BOARD`,
   `ARBITER_DEV_ID` and `ARBITER_HW_MAP` set. From a shell:
   `arbiter run --board nrf9161dk -- <command>` acquires, runs and releases.
   CLI exit codes: 0 OK, 75 queued, 76 paused, 77 revoked.
