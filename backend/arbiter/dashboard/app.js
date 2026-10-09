@@ -277,6 +277,7 @@ function render() {
   const leased = state.boards.filter((b) => b.state === "LEASED").length;
   const waiting = (state.queue || []).length;
   fill($("#summary"), `${plural(state.boards.length, "board")} · ${leased} in use · ${waiting} waiting`);
+  renderStats(leased, waiting);
   $("#pause-all").disabled = leased === 0;
   fill($("#boards-count"), String(state.boards.length));
 
@@ -296,6 +297,20 @@ function render() {
   if (page === "settings") renderSettings();
 }
 
+function renderStats(leased, waiting) {
+  const bad = state.boards.filter((b) => boardStatus(b).level === "err").length;
+  const agents = (state.sessions || []).filter((s) => !s.ended).length;
+  const pend = (state.approvals || []).length;
+  const tiles = [
+    ["Boards", state.boards.length, bad ? "err" : "pink", bad ? `${bad} need${bad === 1 ? "s" : ""} attention` : `${state.boards.length - leased} free`],
+    ["In use", leased, "sage", leased ? state.boards.filter((b) => b.lease).map((b) => who(b.lease.holder)).join(", ") : "no agent holds a board"],
+    ["Waiting", waiting, "peach", waiting ? `oldest ${dur(Math.max(...state.queue.map((e) => e.waiting_s || 0)))}` : "queue is empty"],
+    ["Agents", agents, pend ? "warn" : "lilac", pend ? `${plural(pend, "request")} for you` : "connected"],
+  ];
+  renderIf($("#stats"), JSON.stringify(tiles), () => tiles.map(([k, v, cls, note]) =>
+    h("div", { class: `tile ${cls}` }, h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)), h("div", { class: "note" }, note))));
+}
+
 function kv(rows) {
   return h("div", { class: "kv" }, rows.filter(Boolean).map(([k, v, cls]) =>
     [h("span", { class: "k" }, k), h("span", { class: `v ${cls || ""}` }, v)]));
@@ -308,7 +323,7 @@ function boardCard(b) {
   const left = leaseLeft(b);
   const level = st.level || (fr && fr.level === "err" ? "err" : "");
   return h("div", {
-    class: `board ${b.id === selected ? "sel" : ""} ${level}`,
+    class: `board st-${b.state.toLowerCase()} ${b.id === selected ? "sel" : ""} ${level}`,
     tabindex: "0",
     role: "button",
     onclick: () => select(b.id),
