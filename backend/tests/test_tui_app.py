@@ -62,6 +62,15 @@ async def until(pilot, cond, wait_s: float = 5.0) -> None:
     raise AssertionError("condition not met")
 
 
+async def click_ready(pilot, find, offset=(0, 0)) -> None:
+    """Click a widget once it is laid out, and check the click landed on it. On slow
+    runners a widget can still have no region, or be replaced (the footer is rebuilt when
+    the bindings change), right after a screen or state change."""
+    await until(pilot, lambda: find().region.height > 0)
+    await pilot.pause()
+    assert await pilot.click(find(), offset=offset)
+
+
 def console_text(app: ArbiterTui) -> str:
     out = []
     for e in app.console_view.model.entries:
@@ -122,7 +131,7 @@ async def test_mouse(daemon, build_dir):
 
         # A click on a suggestion completes it.
         await pilot.press("k")
-        await pilot.click("#suggest", offset=(2, 0))
+        await click_ready(pilot, lambda: app.query_one("#suggest"), offset=(2, 0))
         assert app.input.value == "kernel "
 
         # Drag across the console selects text; Ctrl+C copies it.
@@ -134,18 +143,17 @@ async def test_mouse(daemon, build_dir):
         assert app.clipboard
 
         # The board names in the status line switch boards.
-        await pilot.click("#status", offset=(10, 0))
+        await click_ready(pilot, lambda: app.query_one("#status"), offset=(10, 0))
         await until(pilot, lambda: app.selected == "sim-2")
 
         # The queue opens from the status line; its buttons and a click outside work.
-        await pilot.click("#status", offset=(29, 0))  # "queue 0"
+        await click_ready(pilot, lambda: app.query_one("#status"), offset=(29, 0))  # "queue 0"
         await until(pilot, lambda: isinstance(app.screen, QueuePopup))
-        await pilot.click("#dismiss")
+        await click_ready(pilot, lambda: app.screen.query_one("#dismiss"))
         await until(pilot, lambda: not app.screen.is_modal)
 
         # The footer keys are buttons too: F5 takes the board.
-        f5 = next(k for k in app.query(FooterKey) if k.key == "f5")
-        await pilot.click(f5)
+        await click_ready(pilot, lambda: next(k for k in app.query(FooterKey) if k.key == "f5"))
         await until(pilot, lambda: app.board is not None and app.board["state"] == "HUMAN")
 
 
