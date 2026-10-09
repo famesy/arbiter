@@ -30,7 +30,9 @@ PROMPT = "uart:~$ "
 
 class SimDriver(BoardDriver):
     kind = "sim"
-    capabilities = frozenset({"flash", "reset", "halt", "recover", "console", "run", "power"})
+    capabilities = frozenset(
+        {"flash", "reset", "halt", "recover", "console", "run", "power", "modem_trace"}
+    )
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
         super().__init__(cfg, hub, state_dir)
@@ -45,6 +47,7 @@ class SimDriver(BoardDriver):
         self._line = ""
         self._boot_task: asyncio.Task[Any] | None = None
         self._hb_task: asyncio.Task[Any] | None = None
+        self._trace_task: asyncio.Task[Any] | None = None
         self.health = "ok"
 
     def _d(self, s: float) -> float:
@@ -62,7 +65,7 @@ class SimDriver(BoardDriver):
             self._hb_task = asyncio.create_task(self._heartbeat())
 
     async def stop(self) -> None:
-        for t in (self._boot_task, self._hb_task):
+        for t in (self._boot_task, self._hb_task, self._trace_task):
             if t:
                 t.cancel()
         await super().stop()
@@ -163,6 +166,10 @@ class SimDriver(BoardDriver):
                 f"[{_ts(up)}] <err> os: Halting system\r\n"
             )
             self.halted = True
+        elif line.startswith("at "):
+            reply = SIM_AT.get(line[3:].strip().upper())
+            self._out((reply + "\r\nOK" if reply else "OK") if reply is not None else "ERROR")
+            self._out("\r\n")
         elif line == "sim sleep":
             self._out(f"[{_ts(up)}] <inf> {self.app}: Entering sleep\r\n")
         else:
@@ -174,6 +181,7 @@ class SimDriver(BoardDriver):
         return ShellCommands(
             True,
             commands=[
+                c("at", "Send an AT command to the modem", 1),
                 c("device", "Device commands", 1, subcommands=[c("list", "List devices", 1)]),
                 c("help", "Prints the help message.", 1),
                 c(
@@ -256,6 +264,21 @@ class SimDriver(BoardDriver):
         self._boot()
         return {"ok": True, "erased": True}
 
+    async def modem_trace(self, on: bool) -> None:
+        """Simulated modem trace: a few bytes of binary data every 50 ms."""
+        if self._trace_task:
+            self._trace_task.cancel()
+            self._trace_task = None
+        if on:
+            self._trace_task = asyncio.create_task(self._trace())
+
+    async def _trace(self) -> None:
+        n = 0
+        while True:
+            await asyncio.sleep(0.05)
+            n += 1
+            self.hub.feed(bytes([0xEF, 0xBE, n & 0xFF, 0x00, 0x10]), "modem-trace")
+
     # ---------------------------------------------------------------- power (used by SimPower)
     def set_power(self, on: bool) -> None:
         if on and not self.powered:
@@ -265,6 +288,22 @@ class SimDriver(BoardDriver):
             if self._boot_task:
                 self._boot_task.cancel()
             self.powered = False
+
+
+# Replies of a registered nRF9161 on LTE-M, for the `at` shell command. "" means just OK.
+SIM_AT = {
+    "AT": "",
+    "AT+CFUN?": "+CFUN: 1",
+    "AT+CEREG?": "+CEREG: 0,1",
+    "AT%XMONITOR": '%XMONITOR: 1,"Sim Telco","SIMT","24201","0A1B",7,20,"0001A2B3",123,6400,52,20,'
+    '"11100000","11100000","00001000","00100001"',
+    "AT%XSYSTEMMODE?": "%XSYSTEMMODE: 1,0,1,0",
+    "AT+CGDCONT?": '+CGDCONT: 0,"IP","iot.example","10.160.12.34",0,0',
+    "AT%XICCID": "%XICCID: 8901234567890123456",
+    "AT+CGMR": "mfw_nrf91x1_2.0.2",
+    "AT+CFUN=1": "",
+    "AT+CFUN=0": "",
+}
 
 
 def _ts(seconds: float) -> str:

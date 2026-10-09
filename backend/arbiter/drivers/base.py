@@ -71,6 +71,10 @@ class BoardDriver:
     async def check_alive(self) -> bool:
         return True
 
+    async def modem_trace(self, on: bool) -> None:
+        """Start or stop feeding the modem's trace output into the "modem-trace" channel."""
+        raise ArbiterError("NOT_SUPPORTED", f"{self.kind} boards have no modem trace output")
+
     async def debugserver(
         self, build_dir: Path, port: int, log_path: Path
     ) -> asyncio.subprocess.Process:

@@ -29,6 +29,9 @@ The dev boards on this machine are shared with other agents and a human. The
   output once the prompt is back.
 - `image_info(build_dir)` summarises a build; `last_good(test=...)` says when
   a test last passed and what changed since.
+- nRF91: `at(cmd=...)` sends an AT command through the app, `lte_status()`
+  summarises the LTE connection, `modem_trace(action="start"|"stop")`
+  captures a modem trace.
 - If the board hangs, call `inspect_hung()`; to debug, use `gdb_batch`,
   `gdb_continue` and `gdb_stop` (never `west debug`).
 - If the board crashes (a `crash` notice, or `serial_expect` reports one), call

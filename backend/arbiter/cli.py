@@ -272,6 +272,37 @@ def cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_at(args: argparse.Namespace) -> int:
+    c = Client()
+    res = c.post(
+        "/api/modem/at",
+        {"lease_token": _lease(c, args), "cmd": args.cmd, "timeout_s": args.timeout},
+    )
+    if args.json:
+        _print(res, True)
+    else:
+        for line in res.get("lines") or []:
+            print(line)
+        print(res.get("final") or "(no final OK / ERROR)")
+        if res.get("hint"):
+            print(f"hint: {res['hint']}", file=sys.stderr)
+    return 0 if res.get("ok") else 1
+
+
+def cmd_lte(args: argparse.Namespace) -> int:
+    c = Client()
+    _print(c.post("/api/modem/lte-status", {"lease_token": _lease(c, args)}), True)
+    return 0
+
+
+def cmd_trace(args: argparse.Namespace) -> int:
+    c = Client()
+    _print(
+        c.post("/api/modem/trace", {"lease_token": _lease(c, args), "action": args.action}), True
+    )
+    return 0
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     c = Client()
     if args.last_good:
@@ -759,6 +790,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--last-good", action="store_true", help="last passing run and what changed")
     sp.add_argument("--build", help="with --last-good: diff Kconfig against this build")
+    sp = add("at", cmd_at, "nRF91: send one AT command to the modem through your board's app")
+    sp.add_argument("cmd")
+    sp.add_argument("--timeout", type=float, default=10)
+    sp.add_argument("--lease")
+    sp = add("lte", cmd_lte, "nRF91: LTE status (registration, cell, signal, PDN)")
+    sp.add_argument("--lease")
+    sp = add("modem-trace", cmd_trace, "nRF91: capture the modem trace")
+    sp.add_argument("action", choices=["start", "stop", "status"])
+    sp.add_argument("--lease")
     sp = add("write", cmd_write, "send a line to the console")
     sp.add_argument("data")
     sp.add_argument("--lease")
