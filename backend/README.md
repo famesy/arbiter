@@ -75,6 +75,11 @@ pip install -e "./backend[tui]"   # adds Textual
 arbiter tui                       # or: arbiter tui nrf9161dk --channel uart:app
 ```
 
+On Windows, run it in Windows Terminal (`wt arbiter tui`, the default terminal on
+Windows 11). The classic console that `cmd.exe` opens on Windows 10 has a cramped font,
+fewer colours and no dim or italic text, so the TUI looks flat there; it says so when it
+starts in one.
+
 The board console fills the terminal. One status line on top shows the board, its
 holder and lease time, the queue length, power and whether the daemon is connected; with
 more than one board it doubles as the board switcher (F2). Type a line and press Enter to

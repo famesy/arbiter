@@ -10,6 +10,8 @@ import asyncio
 import codecs
 import contextlib
 import json
+import os
+import sys
 import time
 from pathlib import Path
 from typing import Any, ClassVar
@@ -31,6 +33,7 @@ from textual.screen import ModalScreen, Screen
 from textual.scroll_view import ScrollView
 from textual.selection import Selection
 from textual.strip import Strip
+from textual.theme import Theme
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
@@ -57,11 +60,73 @@ VIEW_OPTS = [
     ("prompt", "Show shell prompts", False),
 ]
 
+# The dashboard's palette, as exact colours. Named ANSI colours ("blue", "yellow") take the
+# terminal's own palette, and dim text is ignored by the classic Windows console, so on
+# Windows they came out dark blue on black or as plain white. Hex colours look the same
+# everywhere.
+INK = "#171615"
+FG = "#ece9e3"
+MUTED = "#8f8b84"
+FAINT = "#5f5b55"
+PINK = "#ead0de"
+SAGE = "#c4dbd2"
+PEACH = "#f2d2c2"
+LILAC = "#d9d6ec"
+WARN = "#ffd84d"
+ERR = "#ff7272"
+
+THEME = Theme(
+    name="arbiter",
+    dark=True,
+    primary=PINK,
+    secondary=LILAC,
+    accent=PEACH,
+    warning=WARN,
+    error=ERR,
+    success=SAGE,
+    foreground=FG,
+    background=INK,
+    surface="#211f1d",
+    panel="#2b2826",
+    variables={
+        "text-muted": MUTED,
+        "footer-background": "#211f1d",
+        "footer-key-foreground": PEACH,
+        "footer-description-foreground": FG,
+        "input-cursor-background": PINK,
+        "input-cursor-foreground": INK,
+        "input-selection-background": "#ead0de55",
+        "scrollbar": "#3a3633",
+        "scrollbar-hover": "#57524d",
+        "scrollbar-active": PINK,
+        "scrollbar-background": INK,
+        "scrollbar-corner-color": INK,
+        "border": PEACH,
+        "screen-selection-background": "#d9d6ec66",
+        "button-color-foreground": INK,
+    },
+)
+
+
+def classic_windows_console() -> bool:
+    """True in the old console host (cmd.exe or PowerShell opened on their own on Windows
+    10), which draws a cramped font and fewer colours. Windows Terminal sets WT_SESSION;
+    VS Code and other terminals set TERM_PROGRAM."""
+    return sys.platform == "win32" and not (
+        os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM")
+    )
+
+
+def chip(text: str, bg: str, fg: str = INK, bold: bool = False) -> tuple[str, Style]:
+    """A pastel pill, like the dashboard's badges."""
+    return f" {text} ", Style(color=fg, bgcolor=bg, bold=bold)
+
+
 # Yellow warnings and red errors stay on even when the firmware's log colours are off.
-LEVEL_STYLE = {"e": Style(color="red"), "w": Style(color="yellow")}
-KIND_STYLE = {"note": Style(dim=True), "agent": Style(dim=True)}
-TAG_STYLE = {"you": Style(color="cyan", bold=True), "agent": Style(color="magenta", bold=True)}
-DIM = Style(dim=True)
+LEVEL_STYLE = {"e": Style(color=ERR), "w": Style(color=WARN)}
+KIND_STYLE = {"note": Style(color=MUTED), "agent": Style(color=MUTED)}
+TAG_STYLE = {"you": Style(color=SAGE, bold=True), "agent": Style(color=PINK, bold=True)}
+DIM = Style(color=MUTED)
 
 
 def _prefs_path() -> Path:
@@ -90,11 +155,11 @@ def line_text(line: Line, view: dict[str, bool]) -> Text | None:
     if line.tag:
         t.append(line.tag + " ", TAG_STYLE.get(line.kind))
     if line.src:
-        t.append(line.src, Style(color="blue", dim=True))
+        t.append(line.src, DIM)
     if line.ts and view["ts"]:
         t.append(line.ts, DIM)
     if line.prompt and view["prompt"]:
-        t.append(line.prompt, Style(color="green", dim=True))
+        t.append(line.prompt, Style(color=FAINT))
     style = LEVEL_STYLE.get(line.level) or KIND_STYLE.get(line.kind) or Style()
     t.append(line.text, style)
     return t
@@ -146,7 +211,7 @@ class ConsoleView(ScrollView, can_focus=False):
         if isinstance(entry, BootBlock):
             if self.view["fold"]:
                 mark = "▾ " if entry.open else "▸ "
-                style = LEVEL_STYLE.get(entry.level) or Style(dim=True, italic=True)
+                style = LEVEL_STYLE.get(entry.level) or Style(color=MUTED, italic=True)
                 out += self._render_text(Text(mark + entry.summary(), style, end=""), width)
             lines = entry.lines if (entry.open or not self.view["fold"]) else []
         else:
@@ -250,13 +315,16 @@ class Popup(ModalScreen[None]):
     Popup { align: center middle; }
     Popup > Vertical {
         width: 76; max-width: 100%; height: auto; max-height: 80%;
-        border: round $accent; background: $surface; padding: 0 1;
+        border: round $border; background: $surface; padding: 0 1;
     }
-    Popup .title { text-style: bold; margin-bottom: 1; }
+    Popup .title { text-style: bold; color: $primary; margin-bottom: 1; }
     Popup .keys { color: $text-muted; margin-top: 1; }
     Popup DataTable { height: auto; max-height: 16; }
     Popup .buttons { height: auto; margin-top: 1; }
-    Popup Button { margin-right: 1; min-width: 8; }
+    Popup Button { margin-right: 1; min-width: 8; background: $panel; color: $foreground; }
+    Popup Button:hover, Popup Button:focus { background: $primary; color: $background; }
+    Popup Button.-success { background: $success; color: $background; }
+    Popup Button.-error { background: $error; color: $background; }
     Popup Checkbox { border: none; padding: 0; background: $surface; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape,q", "dismiss", "Close")]
@@ -494,17 +562,18 @@ class ArbiterTui(App[int]):
     ENABLE_COMMAND_PALETTE = False
     CSS = """
     Screen { layout: vertical; }
-    #status { height: 1; background: $panel; padding: 0 1; }
+    #status { height: 1; background: $surface; padding: 0 1; }
+    ConsoleView { padding: 0 1; }
     #suggest {
         height: auto; max-height: 8; border: none; padding: 0;
         background: $surface; display: none;
     }
     #suggest.open { display: block; }
-    #hint { height: 1; padding: 0 1; color: $text-muted; display: none; }
+    #hint { height: 1; padding: 0 1; color: $text-muted; background: $surface; display: none; }
     #hint.on { display: block; }
-    #prompt { height: 1; }
-    #mark { width: 3; color: $accent; padding-left: 1; }
-    #input { height: 1; border: none; padding: 0; background: $background; }
+    #prompt { height: 1; background: $surface; }
+    #mark { width: 3; color: $primary; text-style: bold; padding-left: 1; }
+    #input { height: 1; border: none; padding: 0; background: $surface; }
     #input:focus { border: none; }
     """
     # One key, several bindings: the footer shows the one that fits the board's state.
@@ -548,7 +617,9 @@ class ArbiterTui(App[int]):
 
     # -------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
-        yield Static(id="status")
+        status = Static(id="status")
+        status.auto_links = False  # link colours would paint over the pastel chips
+        yield status
         yield ConsoleView(self.view, id="console")
         yield Suggest(id="suggest")
         yield Static(id="hint")
@@ -585,6 +656,14 @@ class ArbiterTui(App[int]):
         return time.time() + self.skew
 
     async def on_mount(self) -> None:
+        self.register_theme(THEME)
+        self.theme = THEME.name
+        if classic_windows_console():
+            self.notify(
+                "This is the classic Windows console. Colours and lines look best in "
+                "Windows Terminal: run `wt arbiter tui`.",
+                timeout=12,
+            )
         self.input.focus()
         self.render_status()
         self.set_interval(1.0, self.render_status)
@@ -906,54 +985,54 @@ class ArbiterTui(App[int]):
             for x in boards:
                 on = x["id"] == self.selected
                 click = Style.from_meta({"@click": f"app.select_board({x['id']!r})"})
-                left.append(f" {x['id']} ", (Style(bold=True, reverse=True) if on else DIM) + click)
-            left.append(" ")
+                text, style = chip(x["id"], PINK, bold=True) if on else (f" {x['id']} ", DIM)
+                left.append(text, style + click)
+            left.append("  ")
         elif b:
-            left.append(b["id"] + "  ", Style(bold=True))
+            left.append(*chip(b["id"], PINK, bold=True))
+            left.append("  ")
         if b is None:
             left.append(
                 "no boards configured" if self.connected else "connecting to arbiterd…", DIM
             )
         else:
             text, level = board_status(b)
-            colour = {"err": "red", "warn": "yellow"}.get(level) or (
-                "green" if b["state"] == "AVAILABLE" else "yellow"
+            colour = {"err": ERR, "warn": WARN}.get(level) or (
+                SAGE if b["state"] == "AVAILABLE" else PEACH
             )
-            left.append("● ", Style(color=colour))
-            left.append(text, Style(color=colour) if level else Style())
+            left.append(*chip(text, colour))
             lease = b.get("lease")
             if lease and b["state"] != "HUMAN":
-                left.append(f" · {who(lease.get('holder'))}")
+                left.append(f"  {who(lease.get('holder'))}")
                 left_s = lease_left(b, self.now())
                 if left_s:
                     left.append(f" · {left_s}", DIM)
             q = queue_for(self.state, b)
-            left.append("  │  ", DIM)
+            left.append("   ")
             click = Style.from_meta({"@click": "app.queue"})
-            left.append(f"queue {len(q)}", (Style(color="yellow") if q else DIM) + click)
+            text, style = chip(f"queue {len(q)}", LILAC) if q else (f"queue {len(q)}", DIM)
+            left.append(text, style + click)
             p = b.get("power")
             if p:
-                left.append("  │  ", DIM)
+                left.append("   ·  ", DIM)
                 if p.get("fault"):
-                    left.append(f"power fault: {p['fault']}", Style(color="red"))
+                    left.append(f"power fault: {p['fault']}", Style(color=ERR))
                 elif p.get("on"):
                     left.append(f"{(p.get('mv') or 0) / 1000:.2f} V")
                 else:
-                    left.append("power off", Style(color="yellow"))
+                    left.append("power off", Style(color=WARN))
             if self.channel != "all":
-                left.append("  │  ", DIM)
+                left.append("   ·  ", DIM)
                 left.append(self.channel)
             n = len(self.state.get("approvals") or [])
             if n:
-                left.append("  │  ", DIM)
-                left.append(
-                    f"{n} request{'' if n == 1 else 's'} (F9)",
-                    Style(color="yellow", bold=True) + Style.from_meta({"@click": "app.requests"}),
-                )
+                left.append("   ·  ", DIM)
+                text, style = chip(f"{n} request{'' if n == 1 else 's'} (F9)", WARN, bold=True)
+                left.append(text, style + Style.from_meta({"@click": "app.requests"}))
         right = (
-            Text("● live", Style(color="green"))
+            Text("● live", Style(color=SAGE))
             if self.connected
-            else Text("○ reconnecting", Style(color="red"))
+            else Text("○ reconnecting", Style(color=ERR))
         )
         grid = Table.grid(expand=True)
         grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
