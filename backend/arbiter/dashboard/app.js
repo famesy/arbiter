@@ -434,7 +434,7 @@ function renderDetail() {
   renderIf(D.head, JSON.stringify([b.id, boardStatus(b)]), () => [h("span", { class: "name" }, b.id), statusPill(b)]);
   renderIf(D.holder, JSON.stringify([b.lease, b.held_by, left, b.op && b.op.running && [b.op.kind, Math.floor(b.op.elapsed_s)]]), () => holderRow(b, left));
   renderIf(D.issues, JSON.stringify(issues), () => issues.map((i) => h("div", { class: `issue ${i.level}` }, i.text)));
-  shell.load(b.id, `${b.shell_commands}|${(lastOp(b.id, "flash") || {}).id}`);
+  shell.load(b.id, `${b.shell_commands}|${b.shell_reason}|${(lastOp(b.id, "flash") || {}).id}`);
   renderIf(D.controls, `${b.id}|${b.state}|${b.lease && b.lease.state}|${!!b.op}`, () => controlBar(b));
   renderTabs(b);
   renderTermHint(b);
@@ -615,7 +615,11 @@ function renderTermHint(b) {
   D.send.disabled = D.input.disabled;
   D.input.placeholder = agentHolds ? `Type alongside ${who(b.lease.holder)}, Enter to send` : "Type a command, Enter to send";
   const where = term.channel === "all" ? "primary console" : term.channel;
-  const tips = shell.board === b.id && shell.data && shell.data.available ? ` · Tab: ${shell.data.count} shell commands · ↑ history` : " · ↑ history";
+  // Say why there are no command hints instead of leaving them silently missing.
+  const sd = shell.board === b.id ? shell.data : null;
+  const tips = !sd ? " · ↑ history"
+    : sd.available ? ` · Tab: ${sd.count} shell commands · ↑ history`
+    : ` · No command hints: ${sd.reason || "none found in the flashed image"}`;
   fill(D.hint, agentHolds
     ? [h("b", {}, who(b.lease.holder)), " keeps the board; your lines are marked as yours", tips]
     : [`Sends to the ${where}`, tips]);
