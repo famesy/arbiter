@@ -22,8 +22,9 @@ function anatomy() {
       actions: [Button({ label: "Approve", variant: "primary" }), Button({ label: "Deny" })] })),
     h("aside", { class: "rail" },
       boards.slice(0, 3).map((b, i) => BoardCard({ ...b, selected: i === 0 })),
-      AgentRow({ label: "claude: lte test", dot: "on", what: "nrf9161dk-1" }),
-      AgentRow({ label: "codex: fota", what: "waiting" })),
+      h("div", { id: "sessions" },
+        AgentRow({ label: "claude: lte test", dot: "on", what: "nrf9161dk-1" }),
+        AgentRow({ label: "codex: fota", what: "waiting" }))),
     h("div", { style: "display:flex;flex-direction:column;gap:var(--s3);min-width:0" },
       BoardBar({ id: "nrf9161dk-1", state: "leased", status: { text: "testing", tone: "busy" }, actions: leasedActions(), holder: leasedHolder(), chips: chips() }),
       TermCard({ channels: [{ id: "all", label: "All" }, { id: "uart:app", label: "uart:app", note: "primary" }], lines: termLines().slice(1, 8) })));

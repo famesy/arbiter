@@ -15,8 +15,8 @@ const STATES = [
     means: "Paused, or taken by a person. Agents wait until it's handed back." },
   { id: "nrf52840dk-1", token: "--lilac", state: "maintenance", status: { text: "maintenance", tone: "" }, line: "nrf52840dk/nrf52840", lineClass: "muted mono",
     means: "Out of the queue on purpose. No agent will be given it." },
-  { id: "nucleo-h743", token: "--card", state: "offline", level: "err", status: { text: "offline", tone: "err" }, line: "Offline: probe not found", lineLevel: "err",
-    means: "Not tinted. The red line under the name says what broke." },
+  { id: "nucleo-h743", token: "--err-bg", state: "offline", level: "err", status: { text: "offline", tone: "err" }, line: "Offline: probe not found", lineLevel: "err",
+    means: "No pastel. A board that's offline or broken turns red, with the reason under its name." },
 ];
 
 const swatch = (name, label) => h("div", { class: "doc-swatch" },

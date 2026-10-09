@@ -16,7 +16,8 @@ document.querySelector("#boards").append(card);`;
 
 const MAKE = `import { h, cls } from "./dom.js";
 
-/** A short status. tone: "" | "free" | "busy" | "warn" | "err". */
+/** A short status.
+    tone: "" | "free" | "busy" | "warn" | "err". */
 export function Pill({ text, tone = "", dot = true } = {}) {
   return h("span", { class: cls("pill", tone) },
     dot ? h("span", { class: "dot" }) : null, text);
@@ -34,7 +35,7 @@ export const BuildingComponents = {
     h("div", { class: "doc-example" },
       h("pre", { class: "doc-code" }, USE),
       h("div", { class: "doc-result" },
-        BoardCard({ id: "nrf9161dk-1", state: "leased", status: { text: "testing", tone: "busy" }, line: "claude: lte test", selected: true }),
+        BoardCard({ id: "nrf9161dk-1", state: "leased", status: { text: "testing", tone: "busy" }, line: "claude: lte test" }),
         h("p", { class: "note" }, "The element it returns, rendered with the real stylesheet."))),
 
     h("h2", {}, "Making a new one"),

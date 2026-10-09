@@ -11,7 +11,7 @@
   font-weight: 600;
   line-height: 1.04;
   letter-spacing: -0.025em;
-  max-width: 16ch;
+  max-width: 22ch;
   margin: 0 0 var(--s5);
 }
 .doc h2 {
@@ -39,8 +39,8 @@
 /* ---------------------------------------------------------------- welcome: anatomy */
 .doc-anatomy {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: var(--s6);
+  grid-template-columns: minmax(0, 1fr) 230px;
+  gap: var(--s5);
   align-items: start;
   margin-top: var(--s6);
 }
@@ -50,7 +50,7 @@
   background: var(--bg);
   padding: var(--s5);
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
   gap: var(--s4);
   min-width: 0;
 }
@@ -91,7 +91,7 @@
 /* ---------------------------------------------------------------- color */
 .doc-states {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: var(--s5) var(--s4);
   margin-top: var(--s5);
 }

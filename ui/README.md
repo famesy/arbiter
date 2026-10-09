@@ -47,4 +47,5 @@ per variant.
 | `guide.js` | Guide, GuideContent, GuideList, GuideRow, Tally, CmdBox, TourItem |
 | `settings.js` | Section, Field, FieldGroup, CheckRow, BoardSettings |
 
-`Pages/Dashboard` puts them together as the terminal-first dashboard.
+`Pages/Dashboard` puts them together as the terminal-first dashboard. The `Docs` pages at the
+top of the sidebar explain the colors, type and spacing, and how to use and add components.
