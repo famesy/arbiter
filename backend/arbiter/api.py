@@ -204,7 +204,7 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         return arb.cancel(sid(ctx), body["ticket"])
 
     async def release(ctx: Ctx, body: Body) -> Any:
-        return arb.release(sid(ctx), body["lease_token"])
+        return arb.release(sid(ctx), body["lease_token"], bool(body.get("force", False)))
 
     async def extend(ctx: Ctx, body: Body) -> Any:
         return arb.extend(sid(ctx), body["lease_token"], float(body.get("minutes", 10)))

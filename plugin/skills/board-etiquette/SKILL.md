@@ -31,6 +31,11 @@ lease from its queue, use it through the arbiter tools, and give it back.
 5. **Hold the lease only while doing hardware work.** Call `release_board` as
    soon as you are done, also after a failure. Don't keep a board while you
    read code or think. Use `extend_lease` only for one long run.
+   **Leave the board booting.** If a `run` result has `boot_failed`, the
+   firmware you left doesn't start, and `release_board` refuses with
+   `BOARD_UNBOOTABLE`. Flash an image that boots and check its banner with
+   `serial_expect`, then release. `force=true` is only for when you can't;
+   tell the user why.
 6. **Paused or revoked means stop.** If a tool returns `LEASE_PAUSED`, the
    human is using the board: stop hardware work, don't retry in a loop, and
    work on code or call `wait_for_board` to get it back (your place is kept).
@@ -99,7 +104,10 @@ green on `native_sim` first when it can run there, then:
    - **twister**: `run(cmd=["west", "twister", "--device-testing", "-p",
      "nrf9161dk/nrf9161/ns", "-T", "tests/my_suite"])`. arbiter adds a hardware
      map that contains only your board, and its serial goes through arbiter, so
-     the dashboard still sees every byte.
+     the dashboard still sees every byte. List and help options
+     (`--list-platforms`, `--list-tests`, `-h`) run as they are, without the
+     board. On nRF91/nRF53 `/ns` targets, add
+     `-x=SB_CONFIG_BOOTLOADER_MCUBOOT=y` so the board still boots afterwards.
    - **pytest or a script**: `run(cmd=["pytest", "tests/hw", "-v"])`. The
      command gets `ARBITER_BOARD`, `ARBITER_DEV_ID` (probe serial) and
      `ARBITER_HW_MAP` in its environment.
@@ -108,7 +116,8 @@ green on `native_sim` first when it can run there, then:
 4. Read the full log at the returned path if the verdict is a failure. Fix the
    code, rebuild, and run again while you still hold the lease only if the
    next attempt is ready soon; otherwise release and re-acquire later.
-5. Release the board.
+5. Make sure the board boots what you leave on it (see rule 5), then release
+   it.
 
 For a quick smoke test, `flash` + `serial_expect("PROJECT EXECUTION
 SUCCESSFUL", timeout_s=30)` is enough.
@@ -127,7 +136,8 @@ arbiter release
 ```
 
 `arbiter run --board ...` acquires, waits in the queue, runs and releases in
-one go. Exit codes: `0` OK, `75` still queued (run again to keep your place),
+one go. If the run left the board unbootable, it keeps the board for you
+instead: flash a working image, then `arbiter release`. Exit codes: `0` OK, `75` still queued (run again to keep your place),
 `76` paused, `77` revoked or expired.
 
 ## Power and current

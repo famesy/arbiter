@@ -156,7 +156,8 @@ def cmd_release(args: argparse.Namespace) -> int:
                 c.post("/api/cancel", {"ticket": t})
             _print({"ok": True, "cancelled_tickets": info["tickets"]}, args.json)
             return 0
-    _print(c.post("/api/release", {"lease_token": _lease(c, args)}), args.json)
+    body = {"lease_token": _lease(c, args), "force": bool(getattr(args, "force", False))}
+    _print(c.post("/api/release", body), args.json)
     return 0
 
 
@@ -254,7 +255,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         res = _wait_op(c, res)
     finally:
         if acquired:
-            c.post("/api/release", {"lease_token": args.lease})
+            try:
+                c.post("/api/release", {"lease_token": args.lease})
+            except ArbiterError as e:  # e.g. the run left the board unbootable: keep it
+                print(f"board kept: {e.message}. {e.hint}", file=sys.stderr)
     for line in res.get("tail", []):
         print(line)
     print(f"\nverdict: {res.get('verdict')}  log: {res.get('log_path')}", file=sys.stderr)
@@ -566,6 +570,10 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         sp = add(name, fn, h)
         sp.add_argument("--lease")
+        if name == "release":
+            sp.add_argument(
+                "--force", action="store_true", help="release a board left unbootable anyway"
+            )
         if name == "read":
             sp.add_argument("--cursor", type=int)
             sp.add_argument("--channel", help="console (default), all, rtt, uart:app, ...")
