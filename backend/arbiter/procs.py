@@ -83,6 +83,30 @@ def kill_tree(pid: int, sig_first: bool = True, grace: float = 3.0) -> None:
             p.kill()
 
 
+async def start_detached(
+    argv: list[str], cwd: str | Path | None, env: dict[str, str], log_path: Path
+) -> asyncio.subprocess.Process:
+    """A long-running helper (a GDB server) with its output going to `log_path`."""
+    kwargs: dict[str, Any] = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as logf:
+        logf.write(f"$ {' '.join(argv)}\n".encode())
+        logf.flush()
+        return await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=str(cwd) if cwd else None,
+            env={"PYTHONIOENCODING": "utf-8", **os.environ, **env},
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=logf,
+            stderr=asyncio.subprocess.STDOUT,
+            **kwargs,
+        )
+
+
 async def run_proc(
     argv: list[str],
     cwd: str | Path | None = None,

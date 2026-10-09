@@ -4,6 +4,7 @@ the service checks the lease before calling it."""
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -69,6 +70,12 @@ class BoardDriver:
 
     async def check_alive(self) -> bool:
         return True
+
+    async def debugserver(
+        self, build_dir: Path, port: int, log_path: Path
+    ) -> asyncio.subprocess.Process:
+        """Start a GDB server for this board on 127.0.0.1:`port`; it runs until killed."""
+        raise ArbiterError("NOT_SUPPORTED", f"{self.kind} boards have no debugger support")
 
     # ---------------------------------------------------------------- console
     async def set_console(self, cmap: ConsoleMap) -> None:

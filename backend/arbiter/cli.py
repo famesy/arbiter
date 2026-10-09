@@ -224,6 +224,47 @@ def cmd_exec(args: argparse.Namespace) -> int:
     return 0 if res.get("prompt_seen") and not res.get("error") else 1
 
 
+def cmd_gdb(args: argparse.Namespace) -> int:
+    c = Client()
+    body: dict[str, Any] = {"lease_token": _lease(c, args)}
+    if args.stop:
+        res = c.post("/api/gdb/stop", body)
+    else:
+        res = c.post("/api/gdb/batch", {**body, "cmds": args.cmds, "timeout_s": args.timeout})
+    if args.json or args.stop:
+        _print(res, True)
+        return 0
+    for r in res["results"]:
+        print(f"(gdb) {r['cmd']}")
+        if r.get("output"):
+            print(r["output"])
+        if r.get("error"):
+            print(f"error: {r['error']}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def cmd_hung(args: argparse.Namespace) -> int:
+    c = Client()
+    res = c.post("/api/gdb/inspect", {"lease_token": _lease(c, args), "build_dir": args.build})
+    if args.json:
+        _print(res, True)
+        return 0
+    for f in res.get("backtrace") or []:
+        where = f" at {f['file']}:{f['line']}" if f.get("file") else ""
+        print(f"#{f['frame']:<2} {f.get('function') or '??'}{where}")
+    for t in res.get("threads") or []:
+        mark = "*" if t.get("current") else " "
+        pend = f"  waits on {t['pended_on']}" if t.get("pended_on") else ""
+        print(
+            f"{mark} {t.get('name') or t['address']:<20} prio {t['priority']:<4} "
+            f"{','.join(t['state'])}{pend}"
+        )
+    for h in res.get("hints") or []:
+        print(f"hint: {h}")
+    return 0
+
+
 def cmd_read(args: argparse.Namespace) -> int:
     c = Client()
     res = c.post(
@@ -672,6 +713,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("exec", cmd_exec, "run one shell command on your board and print its output")
     sp.add_argument("cmd")
     sp.add_argument("--timeout", type=float, default=10)
+    sp.add_argument("--lease")
+    sp = add("gdb", cmd_gdb, "run gdb commands on your board: arbiter gdb bt 'print x'")
+    sp.add_argument("cmds", nargs="*")
+    sp.add_argument("--timeout", type=float, default=10)
+    sp.add_argument("--stop", action="store_true", help="detach gdb and let the board run")
+    sp.add_argument("--lease")
+    sp = add("hung", cmd_hung, "halt your board, show where it is stuck, and let it run on")
+    sp.add_argument("--build", help="the flashed build dir, if arbiter didn't flash it")
     sp.add_argument("--lease")
     sp = add("write", cmd_write, "send a line to the console")
     sp.add_argument("data")
