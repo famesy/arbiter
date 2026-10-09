@@ -11,6 +11,9 @@ human_name = "Fame"
 # NCS tools are not on PATH outside nRF Connect's terminal. Point at the toolchain
 # bundle's environment.json so west and nrfutil resolve from it.
 # toolchain_env = 'C:\ncs\toolchains\<id>\environment.json'
+# West runs in the workspace each build names in its CMakeCache.txt. Only builds that
+# don't record one need this (a board can set its own zephyr_base too).
+# zephyr_base = 'C:\ncs\v3.4.1\zephyr'
 # Folders added to the import path for `driver = "module:Class"` plugins.
 # plugin_paths = ["~/arbiter-plugins"]
 

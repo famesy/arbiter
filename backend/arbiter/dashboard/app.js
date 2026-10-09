@@ -874,12 +874,11 @@ const term = {
     let text = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
     let cls = "";
     let tag = null;
-    // Lines sent to the board: "[human:Fame] > cmd" or "[agent:claude-1] > cmd".
-    const sent = /^\[(human|agent):([^\]]*)\] > /.exec(text);
+    // Lines sent to the board: "[you] > cmd" (the human) or "[claude-1a2b] > cmd" (an agent).
+    const sent = /^\[(you|[\w.]+-[0-9a-f]{4})\] > /.exec(text);
     if (sent) {
-      const me = state && state.daemon && state.daemon.human;
-      const mine = sent[1] === "human" && (!me || sent[2] === me);
-      tag = h("span", { class: `who ${mine ? "you" : "agent"}` }, mine ? "[you]" : `[${sent[2]}]`);
+      const mine = sent[1] === "you";
+      tag = h("span", { class: `who ${mine ? "you" : "agent"}` }, `[${sent[1]}]`);
       text = text.slice(sent[0].length - 2); // keep "> cmd"
       cls = mine ? "h" : "a";
     } else if (shown.dim || start.dim) {
