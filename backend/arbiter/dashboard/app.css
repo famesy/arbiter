@@ -205,11 +205,6 @@ main {
 .kv .v { min-width: 0; overflow-wrap: anywhere; }
 
 /* ------------------------------------------------------------------ detail */
-.detail-head { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
-.detail-head .name { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
-.detail-meta { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); color: var(--muted); font-size: 13px; margin-top: var(--s2); }
-.detail-holder { margin-top: var(--s3); }
-.controls { margin-top: var(--s4); }
 
 .tabs {
   display: inline-flex;
@@ -557,20 +552,6 @@ header .brand { font-family: var(--serif); font-size: 24px; font-weight: 600; le
 #nav a.on { background: var(--ink); color: var(--card); box-shadow: none; }
 #pause-all { border-width: var(--edge); }
 
-/* Summary tiles. */
-.stats-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s4); margin-bottom: var(--s5); }
-.tile { border: var(--edge) solid var(--ink); border-radius: var(--r-lg); padding: var(--s4) var(--s5) var(--s3); min-width: 0; }
-.tile .k { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-.tile .v { font-family: var(--serif); font-size: 44px; line-height: 1.15; letter-spacing: -0.02em; margin-top: var(--s1); }
-.tile .note { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tile.pink { background: var(--pink); }
-.tile.sage { background: var(--sage); }
-.tile.peach { background: var(--peach); }
-.tile.lilac { background: var(--lilac); }
-.tile.warn { background: var(--warn-bg); color: var(--warn-fg); }
-.tile.err { background: var(--err-bg); color: var(--err-fg); }
-.tile.warn .k, .tile.err .k, .tile.warn .note, .tile.err .note { color: inherit; }
-
 /* Boards are tinted by state: sage free, pink in use, peach held or paused, lilac in
    maintenance. Problems keep yellow and red. */
 .board { border: var(--edge) solid var(--ink); border-radius: var(--r); background: var(--card); }
@@ -587,9 +568,6 @@ header .brand { font-family: var(--serif); font-size: 24px; font-weight: 600; le
 .board .kv .k { color: var(--muted); }
 .kv .v { font-variant-numeric: tabular-nums; }
 
-.detail-head .name { font-family: var(--serif); font-size: 38px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.1; }
-.controls { display: inline-flex; flex-wrap: wrap; border: var(--edge) solid var(--ink); border-radius: 28px; padding: 6px; background: var(--card); }
-.controls .sep { background: var(--ink); opacity: 0.3; }
 
 .tabs { background: var(--hover); border: 1.5px solid var(--ink); border-radius: 999px; }
 .tabs button { border: none; border-radius: 999px; color: var(--fg); }
@@ -632,12 +610,151 @@ input.switch:checked::after { background: var(--card); }
 .efield .tag { border-color: var(--ink); color: var(--fg); background: var(--sage); }
 .efield .tag.restart { background: var(--peach); }
 
+@media (max-width: 600px) {
+  header .brand { font-size: 21px; }
+}
+
+/* ------------------------------------------------------------------ terminal first */
+/* The page is the terminal. Boards and agents sit in a narrow rail; everything else is
+   one chip away, in a sheet. Names and key values use the serif, bold. */
+.desk { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: var(--s5); align-items: start; }
+.rail { position: sticky; top: 84px; display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+.rail h2 { margin: var(--s2) 0 0; }
+.rail h2:first-child { margin-top: 0; }
+#boards { gap: var(--s2); }
+.board { padding: 10px var(--s3) 10px var(--s4); }
+.board .top { gap: var(--s2); }
+.board .name { font-size: 19px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board .pill { font-size: 11px; padding: 1px 8px; }
+.board .line { font-size: 12.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board .line.err { color: var(--err-fg); font-weight: 600; }
+.board .line.warn { color: var(--warn-fg); font-weight: 600; }
+.probe-chip { width: 100%; border-style: dashed; border-radius: var(--r); background: transparent; font-weight: 400; }
+#sessions { display: flex; flex-direction: column; gap: 2px; }
+#sessions .empty { padding: var(--s1) 0; font-size: 13px; }
+#sessions .agent { display: flex; align-items: center; gap: var(--s2); font-size: 13px; padding: 4px 2px; min-width: 0; }
+#sessions .agent .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; }
+#sessions .agent .dot.on { background: var(--rose); }
+#sessions .agent .dot.warn { background: var(--warn-line); }
+#sessions .agent .who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#sessions .agent .what { margin-left: auto; color: var(--muted); white-space: nowrap; font-size: 12px; }
+
+#detail { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.boardbar { border: var(--edge) solid var(--ink); border-radius: var(--r-lg); padding: var(--s3) var(--s4) var(--s3) var(--s5); background: var(--card); }
+.boardbar.st-available { background: var(--sage); }
+.boardbar.st-leased { background: var(--pink); }
+.boardbar.st-paused, .boardbar.st-human { background: var(--peach); }
+.boardbar.st-maintenance { background: var(--lilac); }
+.boardbar.err { background: var(--err-bg); border-color: var(--err-line); }
+.head-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.head-main { display: flex; align-items: center; gap: var(--s3); flex: 1; min-width: 0; flex-wrap: wrap; }
+.head-main .name { font-family: var(--serif); font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; overflow-wrap: anywhere; }
+.head-actions { display: flex; gap: var(--s2); align-items: center; }
+.head-actions .menu > summary { min-height: 34px; display: inline-flex; align-items: center; padding: 4px 14px; font-weight: 500; font-size: 14px; background: var(--card); }
+.menu-body button { display: block; width: 100%; text-align: left; border: none; border-radius: var(--r-sm); background: transparent; margin: 1px 0; white-space: nowrap; }
+.menu-body button:hover:not(:disabled) { background: var(--hover); }
+.menu-body button.danger { color: var(--err-fg); }
+.meta-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2) var(--s4); flex-wrap: wrap; margin-top: var(--s2); }
+.holder-row { display: flex; align-items: center; gap: var(--s2) var(--s4); flex-wrap: wrap; min-width: 0; flex: 1 1 320px; }
+.holder { display: inline-flex; align-items: baseline; gap: var(--s2); border: var(--edge) solid var(--ink); border-radius: 999px; padding: 3px 14px; background: var(--card); }
+.holder .k, .chip .k, .guide-head .k { font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.holder b { font-size: 15px; }
+.left { font-size: 13px; color: var(--muted); }
+.big-num { font-family: var(--serif); font-size: 24px; font-weight: 700; color: var(--fg); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.op { font-size: 12px; font-weight: 600; background: var(--ink); color: var(--card); border-radius: 999px; padding: 2px 10px; }
+.reason { color: var(--muted); font-size: 13px; font-style: italic; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.issues { display: flex; flex-direction: column; gap: var(--s1); }
+.issues:not(:empty) { margin-top: var(--s2); }
+.issue { font-size: 13px; font-weight: 600; border-radius: var(--r-sm); padding: 4px var(--s3); overflow-wrap: anywhere; }
+.issue.warn { background: var(--warn-bg); color: var(--warn-fg); border: 1.5px solid var(--warn-line); }
+.issue.err { background: var(--card); color: var(--err-fg); border: 1.5px solid var(--err-line); }
+
+.term-card { padding: var(--s3); }
+.term-card .term-bar { margin-bottom: var(--s2); }
+#term { height: calc(100vh - 360px); min-height: 320px; font-size: 13px; }
+.term-card .term-input { margin-top: var(--s2); }
+.term-card .hint { margin: 6px var(--s2) 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.term-card .help:empty { display: none; }
+.strip { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: baseline; gap: 6px; border-width: 1.5px; padding: 2px 14px; min-height: 32px; background: var(--card); }
+.chip b { font-family: var(--serif); font-size: 17px; font-weight: 700; }
+.chip.on { background: var(--pink); }
+.chip.ok { background: var(--sage); }
+.chip.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+.chip.err { background: var(--err-bg); border-color: var(--err-line); color: var(--err-fg); }
+.chip.err .k { color: inherit; }
+
+/* Sheets and the guide are dialogs with the same ink frame. */
+dialog { border: var(--edge) solid var(--ink); border-radius: var(--r-lg); background: var(--card); color: var(--fg); padding: 0; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.22); }
+dialog::backdrop { background: rgba(23, 22, 21, 0.32); }
+#sheet { width: min(760px, calc(100vw - 32px)); max-height: min(80vh, 760px); }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); padding: var(--s4) var(--s4) var(--s2) var(--s5); }
+.sheet-head h2, #guide h2 { font-family: var(--serif); font-size: 28px; font-weight: 700; letter-spacing: -0.02em; text-transform: none; color: var(--fg); margin: 0; }
+#sheet-body { padding: var(--s2) var(--s5) var(--s5); overflow: auto; }
+#sheet-body .kv { font-size: 14px; gap: 6px var(--s5); margin: 0; }
+#sheet-body #feed { max-height: 60vh; }
+#activity .check { margin: 0 0 var(--s2); }
+.power-panel .power-top { align-items: center; }
+
+#more > summary { font-size: 18px; line-height: 1; padding: 6px 12px; border-width: var(--edge); background: var(--card); }
+#more .menu-body { min-width: 220px; }
+button.link { border: none; background: none; padding: 4px 2px; text-decoration: underline; text-underline-offset: 3px; color: var(--muted); font-weight: 400; }
+button.link:hover:not(:disabled) { background: none; color: var(--fg); }
+
+#guide { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+.guide-head { padding: var(--s5) var(--s6) var(--s4); border-bottom: var(--edge) solid var(--ink); }
+.guide-head.sage { background: var(--sage); }
+.guide-head.peach { background: var(--peach); }
+.guide-head.lilac { background: var(--lilac); }
+.guide-head.pink { background: var(--pink); }
+#guide h2 { font-size: 36px; margin-top: 2px; }
+.guide-steps { display: flex; gap: 6px; margin-bottom: var(--s4); }
+.guide-steps .step { width: 30px; min-height: 30px; padding: 0; font-family: var(--serif); font-weight: 700; background: var(--card); }
+.guide-steps .step.on { background: var(--ink); color: var(--card); }
+.guide-steps .step.done { background: transparent; }
+.guide-body { padding: var(--s5) var(--s6); display: flex; flex-direction: column; gap: var(--s3); }
+.guide-body p { margin: 0; }
+.guide-body .lead { font-size: 16px; }
+.guide-body h3 { margin: var(--s2) 0 0; font-family: var(--serif); font-size: 20px; }
+.guide-list { display: flex; flex-direction: column; gap: var(--s1); }
+.guide-list .row { display: flex; align-items: center; gap: var(--s3); border: 1.5px solid var(--ink); border-radius: var(--r); padding: 6px var(--s2) 6px var(--s4); background: var(--card); min-width: 0; flex-wrap: wrap; }
+.guide-list .row .name { font-family: var(--serif); font-size: 17px; }
+.guide-list .row .pill, .guide-list .row button { margin-left: auto; }
+.tally { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.tally .t { border: 1.5px solid var(--ink); border-radius: 999px; padding: 2px 14px; }
+.tally .t b { font-family: var(--serif); font-size: 20px; }
+.tally .t.ok { background: var(--sage); }
+.tally .t.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+.tally .t.err { background: var(--err-bg); border-color: var(--err-line); color: var(--err-fg); }
+.cmd-box { display: flex; align-items: flex-start; gap: var(--s2); background: var(--term-bg); border-radius: var(--r); padding: var(--s3) var(--s3) var(--s3) var(--s4); }
+.cmd-box pre { flex: 1; margin: 0; color: var(--term-fg); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.cmd-box button { background: var(--card); }
+.tour-item { display: flex; gap: var(--s3); align-items: flex-start; }
+.tour-item .n { flex: none; width: 30px; height: 30px; border-radius: 50%; border: var(--edge) solid var(--ink); display: inline-flex; align-items: center; justify-content: center; font-family: var(--serif); font-weight: 700; background: var(--pink); }
+.guide-foot { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s6) var(--s5); }
+.guide-foot .spacer { flex: 1; }
+
 @media (max-width: 900px) {
-  .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .desk { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+  .rail { position: static; }
+  #boards { flex-direction: row; overflow-x: auto; padding: 4px 4px 6px; margin: -4px; }
+  #boards .board { flex: 0 0 auto; min-width: 190px; max-width: 240px; }
+  #sessions { flex-direction: row; flex-wrap: wrap; gap: 2px var(--s4); }
+  #sessions .agent .what { margin-left: var(--s1); }
+  #term { height: 58vh; min-height: 280px; }
 }
 @media (max-width: 600px) {
-  .tile .v { font-size: 34px; }
-  .detail-head .name { font-size: 30px; }
-  header .brand { font-size: 21px; }
-  .controls { border-radius: var(--r); }
+  .head-main .name { font-size: 28px; }
+  .boardbar { padding: var(--s3); }
+  .guide-head, .guide-body { padding-left: var(--s4); padding-right: var(--s4); }
+  .guide-foot { padding: var(--s3) var(--s4) var(--s4); }
+  #guide h2 { font-size: 30px; }
+  #sheet-body { padding: var(--s2) var(--s4) var(--s4); }
 }
+.chip .k:only-child { text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 500; color: var(--fg); }
+.guide-body > button { align-self: flex-start; }
+@media (max-width: 600px) {
+  .head-row { flex-direction: column; align-items: flex-start; }
+  .head-main { flex: none; }
+}
+.power-panel .big { font-family: var(--serif); font-weight: 700; }

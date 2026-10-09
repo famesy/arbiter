@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 rtt = ["pylink-square>=1.2"]
 ppk2 = ["ppk2-api>=0.9"]
+tui = ["textual>=8.0"]  # `arbiter tui`, the terminal UI
 test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]

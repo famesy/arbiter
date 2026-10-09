@@ -226,40 +226,40 @@ function leaseLeft(b) {
 }
 
 // ------------------------------------------------------------------ alerts
-function alerts() {
-  const out = [];
-  for (const a of state.approvals || []) {
+// Approvals need an answer, so they get the banner at the top. Board problems show on the
+// board itself: a tinted chip in the rail and a line under the board's name.
+function approvals() {
+  return (state.approvals || []).map((a) => {
     const s = (state.sessions || []).find((x) => x.id === a.session);
-    out.push({
+    return {
       level: "warn",
       board: a.board,
-      text: `${s ? s.label : a.session} asks to ${a.action.replace(/_/g, " ")} ${a.board}`,
+      text: [h("b", {}, s ? s.label : a.session), ` asks to ${a.action.replace(/_/g, " ")} `, h("b", {}, a.board)],
+      key: a.id,
       actions: [
-        h("button", { onclick: () => act("Approve", () => api("POST", `/api/admin/approvals/${a.id}`, { approve: true })) }, "Approve"),
+        h("button", { class: "primary", onclick: () => act("Approve", () => api("POST", `/api/admin/approvals/${a.id}`, { approve: true })) }, "Approve"),
         h("button", { onclick: () => act("Deny", () => api("POST", `/api/admin/approvals/${a.id}`, { approve: false })) }, "Deny"),
       ],
-    });
+    };
+  });
+}
+
+function boardIssues(b) {
+  const out = [];
+  if (b.state === "OFFLINE") out.push({ level: "err", text: "Offline: probe not found" });
+  if (b.state === "NEEDS_RECOVER") out.push({ level: "err", text: `Needs attention${b.note ? `: ${b.note}` : ""}` });
+  if (b.supported === false) out.push({ level: "warn", text: b.support_note || "Not supported on this host" });
+  if (b.health && ["error", "missing"].includes(b.health)) out.push({ level: b.health === "error" ? "err" : "warn", text: b.health_note || `Health ${b.health}` });
+  if (b.power && b.power.fault) out.push({ level: "err", text: `Power fault: ${b.power.fault}` });
+  else if (b.power && b.power.supports.includes("switch") && !b.power.on) out.push({ level: "warn", text: "Powered off" });
+  if (b.lease && b.lease.state === "EXPIRING") out.push({ level: "warn", text: `${who(b.lease.holder)} stopped responding; the lease ${leaseLeft(b)}` });
+  const fr = flashResult(b.id);
+  if (fr && fr.level) {
+    const msg = (fr.op.result && fr.op.result.warning) || (fr.op.error && fr.op.error.message) || "";
+    out.push({ level: fr.level, text: `${fr.text[0].toUpperCase()}${fr.text.slice(1)}${msg ? `: ${msg}` : ""}` });
   }
-  for (const b of state.boards) {
-    if (b.state === "OFFLINE") out.push({ level: "err", board: b.id, text: `${b.id} is offline (probe not found)` });
-    if (b.state === "NEEDS_RECOVER") out.push({ level: "err", board: b.id, text: `${b.id} needs attention${b.note ? `: ${b.note}` : ""}` });
-    if (b.supported === false) out.push({ level: "warn", board: b.id, text: `${b.id}: ${b.support_note || "not supported on this host"}` });
-    if (b.health && ["error", "missing"].includes(b.health)) {
-      out.push({ level: b.health === "error" ? "err" : "warn", board: b.id, text: `${b.id}: ${b.health_note || `health ${b.health}`}` });
-    }
-    if (b.power && b.power.fault) out.push({ level: "err", board: b.id, text: `${b.id} power fault: ${b.power.fault}` });
-    else if (b.power && b.power.supports.includes("switch") && !b.power.on) out.push({ level: "warn", board: b.id, text: `${b.id} is powered off` });
-    if (b.lease && b.lease.state === "EXPIRING") {
-      out.push({ level: "warn", board: b.id, text: `${who(b.lease.holder)} stopped responding on ${b.id}; the lease ends in ${leaseLeft(b)}` });
-    }
-    const fr = flashResult(b.id);
-    if (fr && fr.level) {
-      const msg = (fr.op.result && fr.op.result.warning) || (fr.op.error && fr.op.error.message) || "";
-      out.push({ level: fr.level, board: b.id, text: `${b.id}: ${fr.text}${msg ? `. ${msg}` : ""}` });
-    }
-    const t = lastOp(b.id, "test");
-    if (t && testFailed(t)) out.push({ level: "err", board: b.id, text: `${b.id}: last test run ${(t.result && t.result.verdict) || "failed"}` });
-  }
+  const t = lastOp(b.id, "test");
+  if (t && testFailed(t)) out.push({ level: "err", text: `Last test run ${(t.result && t.result.verdict) || "failed"}` });
   return out;
 }
 
@@ -274,71 +274,44 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function render() {
   if (!state) return;
-  const leased = state.boards.filter((b) => b.state === "LEASED").length;
-  const waiting = (state.queue || []).length;
-  fill($("#summary"), `${plural(state.boards.length, "board")} · ${leased} in use · ${waiting} waiting`);
-  renderStats(leased, waiting);
-  $("#pause-all").disabled = leased === 0;
-  fill($("#boards-count"), String(state.boards.length));
-
-  const al = alerts();
-  renderIf($("#alerts"), JSON.stringify([selected, al.map((a) => [a.level, a.text])]), () =>
+  $("#pause-all").disabled = !state.boards.some((b) => b.state === "LEASED");
+  const al = approvals();
+  renderIf($("#alerts"), JSON.stringify([selected, al.map((a) => a.key)]), () =>
     al.map((a) => h("div", { class: `alert ${a.level}` },
       h("span", { class: "text" }, a.text),
       h("span", { class: "btn-row" },
-        a.actions || [],
+        a.actions,
         a.board && a.board !== selected ? h("button", { class: "small", onclick: () => select(a.board) }, "Show board") : null))));
 
-  fill($("#boards"), state.boards.length ? state.boards.map(boardCard) : h("div", { class: "empty" }, "No boards configured."));
+  fill($("#boards"), state.boards.length ? state.boards.map(boardCard) : h("div", { class: "empty" }, "No boards yet.",
+    h("div", {}, h("button", { class: "small", onclick: () => guide.open() }, "Add a board"))));
   renderProbes();
   renderSessions();
   renderDetail();
   renderFeed();
+  guide.maybeOpen();
   if (page === "settings") renderSettings();
 }
 
-function renderStats(leased, waiting) {
-  const bad = state.boards.filter((b) => boardStatus(b).level === "err").length;
-  const agents = (state.sessions || []).filter((s) => !s.ended).length;
-  const pend = (state.approvals || []).length;
-  const tiles = [
-    ["Boards", state.boards.length, bad ? "err" : "pink", bad ? `${bad} need${bad === 1 ? "s" : ""} attention` : `${state.boards.length - leased} free`],
-    ["In use", leased, "sage", leased ? state.boards.filter((b) => b.lease).map((b) => who(b.lease.holder)).join(", ") : "no agent holds a board"],
-    ["Waiting", waiting, "peach", waiting ? `oldest ${dur(Math.max(...state.queue.map((e) => e.waiting_s || 0)))}` : "queue is empty"],
-    ["Agents", agents, pend ? "warn" : "lilac", pend ? `${plural(pend, "request")} for you` : "connected"],
-  ];
-  renderIf($("#stats"), JSON.stringify(tiles), () => tiles.map(([k, v, cls, note]) =>
-    h("div", { class: `tile ${cls}` }, h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)), h("div", { class: "note" }, note))));
-}
-
-function kv(rows) {
-  return h("div", { class: "kv" }, rows.filter(Boolean).map(([k, v, cls]) =>
-    [h("span", { class: "k" }, k), h("span", { class: `v ${cls || ""}` }, v)]));
-}
-
+// One compact chip per board: the name, its status, and who holds it.
 function boardCard(b) {
   const st = boardStatus(b);
-  const fr = flashResult(b.id);
-  const q = queueFor(b);
+  const issues = boardIssues(b);
+  const level = st.level || (issues.some((i) => i.level === "err") ? "err" : issues.length ? "warn" : "");
   const left = leaseLeft(b);
-  const level = st.level || (fr && fr.level === "err" ? "err" : "");
+  const q = queueFor(b).length;
   return h("div", {
     class: `board st-${b.state.toLowerCase()} ${b.id === selected ? "sel" : ""} ${level}`,
     tabindex: "0",
     role: "button",
+    "aria-pressed": b.id === selected ? "true" : "false",
     onclick: () => select(b.id),
     onkeydown: (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(b.id); } },
   },
     h("div", { class: "top" }, h("span", { class: "name" }, b.id), statusPill(b)),
-    h("div", { class: "sub mono" }, b.platform, b.serial ? ` · ${b.serial}` : ""),
-    kv([
-      b.lease && ["Holder", who(b.lease.holder)],
-      left && ["Lease", left],
-      ["Console", consoleSource(b)],
-      fr && ["Last flash", fr.text, fr.level],
-      q.length && ["Waiting", q.map((e) => e.who).join(", ")],
-      b.power && ["Power", b.power.on ? `On · ${(b.power.mv / 1000).toFixed(2)} V` : "Off", b.power.on ? "" : "warn"],
-    ]));
+    issues.length ? h("div", { class: `line ${issues[0].level}` }, issues[0].text) :
+    b.lease ? h("div", { class: "line" }, h("b", {}, who(b.lease.holder)), left ? ` · ${left}` : "", q ? ` · ${q} waiting` : "") :
+    h("div", { class: "line muted mono" }, b.platform, q ? ` · ${q} waiting` : ""));
 }
 
 function renderProbes() {
@@ -346,10 +319,8 @@ function renderProbes() {
   const norm = (x) => String(x || "").replace(/^0+/, "");
   const known = new Set(state.boards.map((b) => norm(b.serial || b.probe_serial)).filter(Boolean));
   const ps = (state.unassigned_probes || []).filter((p) => !known.has(norm(p.serial)));
-  renderIf($("#probes"), JSON.stringify(ps), () => ps.length ? h("div", { class: "board", style: "cursor:default;margin-top:var(--s2)" },
-    h("div", { class: "name" }, "New probe found"),
-    ps.map((p) => h("div", { class: "sub mono" }, `${p.serial} ${p.kind || ""} ${p.board || ""}`)),
-    h("div", { class: "hint" }, "Run ", h("code", {}, "arbiter discover"), " for a config block, add it to config.toml and restart arbiterd.")) : []);
+  renderIf($("#probes"), JSON.stringify(ps), () => ps.length ? h("button", { class: "probe-chip", onclick: () => guide.open("board") },
+    h("b", {}, plural(ps.length, "new probe")), " found · Add") : []);
 }
 
 function renderSessions() {
@@ -357,7 +328,6 @@ function renderSessions() {
   for (const b of state.boards) if (b.lease) holding[b.lease.session_id] = b.id;
   const waiting = {};
   for (const e of state.queue || []) waiting[e.session] = e.wants;
-  // Hide agents that have gone quiet and hold nothing; they only add noise.
   // Show agents that hold or wait for a board, plus ones active recently. Idle sessions from
   // before the daemon started, or silent for 2 minutes, are leftovers and only add noise.
   const now = nowS();
@@ -367,15 +337,13 @@ function renderSessions() {
     if (holding[s.id] || waiting[s.id]) return true;
     return s.alive && s.last_heartbeat >= started && now - s.last_heartbeat < 120;
   });
-  fill($("#agents-count"), String(ss.length));
-  renderIf($("#sessions"), JSON.stringify([ss.map((s) => [s.id, s.alive]), holding, waiting]), () => ss.length ? h("table", {},
-    ss.map((s) => h("tr", {},
-      h("td", {}, h("div", {}, s.label), h("div", { class: "sub" }, s.agent_kind, s.branch ? ` · ${s.branch}` : "")),
-      h("td", { class: !s.alive ? "warn" : "", style: "text-align:right" },
-        holding[s.id] ? h("span", { class: "pill busy" }, holding[s.id]) :
-        waiting[s.id] ? h("span", { class: "muted" }, `waiting for ${waiting[s.id]}`) :
-        s.alive ? h("span", { class: "muted" }, "idle") : "not responding")))) :
-    h("div", { class: "empty" }, "No agents connected. Agents appear here when they start with the arbiter plugin."));
+  renderIf($("#sessions"), JSON.stringify([ss.map((s) => [s.id, s.alive]), holding, waiting]), () => ss.length ?
+    ss.map((s) => h("div", { class: "agent", title: [s.agent_kind, s.branch].filter(Boolean).join(" · ") },
+      h("span", { class: `dot ${!s.alive ? "warn" : holding[s.id] ? "on" : ""}` }),
+      h("b", { class: "who" }, s.label),
+      h("span", { class: "what" },
+        holding[s.id] ? holding[s.id] : waiting[s.id] ? `waiting for ${waiting[s.id]}` : s.alive ? "idle" : "not responding"))) :
+    h("div", { class: "empty" }, "No agents yet."));
 }
 
 // ------------------------------------------------------------------ detail
@@ -388,14 +356,47 @@ function select(id) {
   if (window.innerWidth <= 900) $("#detail").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+// The panels behind the strip under the terminal. Each opens in the sheet and goes back
+// to #stash when the sheet closes; they keep rendering live either way.
+const SHEETS = {
+  queue: { title: () => "Queue", el: () => D.queue },
+  power: { title: (b) => `Power${b.power ? ` · ${b.power.kind}` : ""}`, el: () => D.power },
+  tests: { title: () => "Test runs", el: () => D.tests },
+  activity: { title: () => "Activity", el: () => $("#activity") },
+  info: { title: (b) => b.id, el: () => D.info },
+};
+let sheetOpen = null;
+
+function openSheet(name) {
+  const b = state.boards.find((x) => x.id === selected);
+  if (!b) return;
+  closeSheet();
+  sheetOpen = name;
+  fill($("#sheet-title"), SHEETS[name].title(b));
+  $("#sheet-body").append(SHEETS[name].el());
+  const dlg = $("#sheet");
+  if (!dlg.open) dlg.showModal();
+}
+
+function closeSheet() {
+  if (!sheetOpen) return;
+  for (const kid of [...$("#sheet-body").children]) $("#stash").append(kid);
+  sheetOpen = null;
+  if ($("#sheet").open) $("#sheet").close();
+}
+
 function renderDetail() {
   const root = $("#detail");
   const b = state.boards.find((x) => x.id === selected);
-  if (!b) { fill(root, h("div", { class: "card empty" }, "Select a board.")); detailFor = null; term.close(); return; }
+  if (!b) { closeSheet(); fill(root, h("div", { class: "card empty" }, "Select a board.")); detailFor = null; term.close(); return; }
   if (detailFor !== b.id) {
+    closeSheet();
     detailFor = b.id;
-    D.head = h("div");
-    D.controls = h("div", { class: "controls btn-row" });
+    for (const k of ["queue", "power", "tests", "info"]) if (D[k]) D[k].remove();
+    D.head = h("div", { class: "head-main" });
+    D.controls = h("div", { class: "head-actions" });
+    D.holder = h("div", { class: "holder-row" });
+    D.issues = h("div", { class: "issues" });
     D.tabs = h("div", { class: "tabs", role: "tablist" });
     D.term = h("pre", { id: "term", tabindex: "0" });
     applyView();
@@ -409,45 +410,115 @@ function renderDetail() {
       onkeydown: (ev) => shell.key(ev),
     });
     D.suggest = h("div", { class: "suggest", hidden: true, role: "listbox" });
-    D.help = h("div", { class: "hint mono" });
+    D.help = h("div", { class: "hint mono help" });
     D.send = h("button", { class: "primary" }, "Send");
     D.hint = h("div", { class: "hint" });
+    D.strip = h("div", { class: "strip" });
     D.queue = h("div", { class: "scroll-x" });
     D.power = h("div");
     D.tests = h("div", { class: "scroll-x" });
-    D.queueCount = h("span", { class: "count" });
+    D.info = h("div");
+    $("#stash").append(D.queue, D.power, D.tests, D.info);
     const form = h("form", { class: "term-input", onsubmit: (ev) => { ev.preventDefault(); sendLine(); } }, D.suggest, D.input, D.send);
     fill(root,
-      h("div", { class: "card" }, D.head, D.controls),
-      h("div", { class: "card" },
-        h("div", { class: "term-bar" }, h("h2", { style: "margin:0" }, "Terminal"), h("div", { class: "btn-row" }, D.tabs, viewMenu())),
-        D.term, form, D.help, D.hint),
-      h("div", { class: "card" }, h("h2", {}, "Queue ", D.queueCount), D.queue),
-      D.power,
-      h("div", { class: "card" }, h("h2", {}, "Test runs"), D.tests));
+      D.bar = h("div", { class: "boardbar" }, h("div", { class: "head-row" }, D.head, D.controls),
+        h("div", { class: "meta-row" }, D.holder, D.strip), D.issues),
+      h("div", { class: "card term-card" },
+        h("div", { class: "term-bar" }, D.tabs, viewMenu()),
+        D.term, form, D.help, D.hint));
     term.open(b.id, term.channel && term.board === b.id ? term.channel : "all");
   }
   const left = leaseLeft(b);
-  const ports = (b.ports || []).map((p) => p.device || p.port || p.name || "").filter(Boolean);
-  fill(D.head,
-    h("div", { class: "detail-head" }, h("span", { class: "name" }, b.id), statusPill(b)),
-    h("div", { class: "detail-meta" },
-      h("span", { class: "mono" }, b.platform),
-      b.serial ? h("span", { class: "mono" }, `probe ${b.serial}`) : null,
-      ports.length ? h("span", { class: "mono" }, ports.join(", ")) : null,
-      h("span", {}, `Console ${consoleSource(b)}`)),
-    b.lease ? h("div", { class: "detail-holder" }, "Held by ", h("b", {}, who(b.lease.holder)),
-      b.lease.reason ? ` for “${b.lease.reason}”` : "",
-      left ? h("span", { class: "muted" }, ` · lease ${left}`) : "",
-      b.lease.paused_by ? h("span", { class: "muted" }, ` · paused by ${who(b.lease.paused_by)}${b.lease.pause_reason ? `: ${b.lease.pause_reason}` : ""}`) : "",
-      b.op && b.op.running ? h("span", { class: "muted" }, ` · ${b.op.kind} running for ${dur(b.op.elapsed_s)}`) : "") : null);
+  const issues = boardIssues(b);
+  D.bar.className = `boardbar st-${b.state.toLowerCase()} ${boardStatus(b).level || (issues.some((i) => i.level === "err") ? "err" : "")}`;
+  renderIf(D.head, JSON.stringify([b.id, boardStatus(b)]), () => [h("span", { class: "name" }, b.id), statusPill(b)]);
+  renderIf(D.holder, JSON.stringify([b.lease, b.held_by, left, b.op && b.op.running && [b.op.kind, Math.floor(b.op.elapsed_s)]]), () => holderRow(b, left));
+  renderIf(D.issues, JSON.stringify(issues), () => issues.map((i) => h("div", { class: `issue ${i.level}` }, i.text)));
   shell.load(b.id, `${b.shell_commands}|${b.shell_reason}|${(lastOp(b.id, "flash") || {}).id}`);
-  renderIf(D.controls, `${b.id}|${b.state}|${b.lease && b.lease.state}|${!!b.op}`, () => controls(b));
+  renderIf(D.controls, `${b.id}|${b.state}|${b.lease && b.lease.state}|${!!b.op}`, () => controlBar(b));
   renderTabs(b);
   renderTermHint(b);
   renderQueue(b);
   renderPower(b);
   renderTests(b);
+  renderInfo(b);
+  renderStrip(b);
+  fitTerm();
+}
+
+// The terminal takes whatever height the window has left under the board bar.
+function fitTerm() {
+  if (!D.term || !D.term.isConnected || page !== "dash") return;
+  if (window.innerWidth <= 900) { D.term.style.height = ""; return; }
+  const top = D.term.getBoundingClientRect().top + window.scrollY;
+  const below = D.term.parentElement.getBoundingClientRect().bottom - D.term.getBoundingClientRect().bottom;
+  const hgt = `${Math.max(320, Math.floor(window.innerHeight - top - below - 24))}px`;
+  if (D.term.style.height !== hgt) D.term.style.height = hgt;
+}
+window.addEventListener("resize", fitTerm);
+
+// Who has the board, framed, with the time left set large.
+function holderRow(b, left) {
+  const op = b.op && b.op.running ? b.op : null;
+  if (b.lease) {
+    return [
+      h("span", { class: "holder" }, h("span", { class: "k" }, b.state === "PAUSED" ? "Paused" : "Held by"), h("b", {}, who(b.lease.holder))),
+      left ? h("span", { class: "left" }, h("span", { class: "big-num" }, left), left === "on hold" || left.startsWith("ends") ? "" : " left") : null,
+      op ? h("span", { class: "op" }, `${op.kind} · ${dur(op.elapsed_s)}`) : null,
+      b.lease.reason ? h("span", { class: "reason", title: b.lease.reason }, `“${b.lease.reason}”`) : null,
+    ];
+  }
+  return h("span", { class: "muted mono" }, b.platform);
+}
+
+function controlBar(b) {
+  const all = controls(b).filter((x) => x.tagName === "BUTTON");
+  const main = all.find((x) => x.classList.contains("primary"));
+  const rest = all.filter((x) => x !== main);
+  const info = h("button", { onclick: () => openSheet("info") }, "Info");
+  const menu = rest.length ? h("details", { class: "menu" }, h("summary", {}, "Actions ▾"),
+    h("div", { class: "menu-body" }, rest)) : null;
+  // A menu action closes the menu; the toast says how it went.
+  for (const x of rest) x.addEventListener("click", () => { const m = x.closest("details"); if (m) setTimeout(() => { m.open = false; }, 0); });
+  return [main, menu, info];
+}
+
+function renderInfo(b) {
+  const ports = (b.ports || []).map((p) => p.device || p.port || p.name || "").filter(Boolean);
+  const fr = flashResult(b.id);
+  const p = b.power;
+  renderIf(D.info, JSON.stringify([b.platform, b.serial, ports, consoleSource(b), fr && fr.text, b.shell_commands, p && [p.on, p.mv], b.tags]), () => kv([
+    ["Platform", h("span", { class: "mono" }, b.platform)],
+    b.serial && ["Probe", h("span", { class: "mono" }, b.serial)],
+    ports.length && ["Ports", h("span", { class: "mono" }, ports.join(", "))],
+    ["Console", consoleSource(b)],
+    fr && ["Last flash", fr.text, fr.level],
+    b.shell_commands && ["Shell", `${b.shell_commands} commands`],
+    p && ["Power", p.on ? `On · ${(p.mv / 1000).toFixed(2)} V` : "Off", p.on ? "" : "warn"],
+    b.tags && b.tags.length && ["Tags", b.tags.join(", ")],
+  ]));
+}
+
+// The strip under the terminal: one chip per panel, with its key value in bold.
+function renderStrip(b) {
+  const q = queueFor(b).length;
+  const p = b.power;
+  const runs = (state.ops || []).filter((o) => o.board === b.id && o.kind === "test");
+  const last = runs[runs.length - 1];
+  const verdict = !last ? "none" : last.running ? "running" : testFailed(last) ? "failed" : "passed";
+  const chips = [
+    ["queue", "Queue", String(q), q ? "on" : ""],
+    p && ["power", "Power", p.fault ? "fault" : p.on ? (p.mv ? `${(p.mv / 1000).toFixed(2)} V` : "on") : "off", p.fault ? "err" : p.on ? "" : "warn"],
+    ["tests", "Tests", verdict, verdict === "failed" ? "err" : verdict === "passed" ? "ok" : ""],
+    ["activity", "Activity", "", ""],
+  ].filter(Boolean);
+  renderIf(D.strip, JSON.stringify(chips), () => chips.map(([k, label, v, cls]) =>
+    h("button", { class: `chip ${cls}`, onclick: () => openSheet(k) }, h("span", { class: "k" }, label), v ? h("b", {}, v) : null)));
+}
+
+function kv(rows) {
+  return h("div", { class: "kv" }, rows.filter(Boolean).map(([k, v, cls]) =>
+    [h("span", { class: "k" }, k), h("span", { class: `v ${cls || ""}` }, v)]));
 }
 
 const BUSY = {
@@ -543,15 +614,15 @@ function renderTermHint(b) {
   D.input.disabled = b.state === "OFFLINE";
   D.send.disabled = D.input.disabled;
   D.input.placeholder = agentHolds ? `Type alongside ${who(b.lease.holder)}, Enter to send` : "Type a command, Enter to send";
-  const where = term.channel === "all" ? "the primary console" : term.channel;
+  const where = term.channel === "all" ? "primary console" : term.channel;
   // Say why there are no command hints instead of leaving them silently missing.
   const sd = shell.board === b.id ? shell.data : null;
-  const tips = !sd ? ""
-    : sd.available ? ` Tab suggests the ${sd.count} shell commands in the flashed image; ↑ recalls earlier lines.`
-    : ` No command hints: ${sd.reason || "none found in the flashed image"}.`;
+  const tips = !sd ? " · ↑ history"
+    : sd.available ? ` · Tab: ${sd.count} shell commands · ↑ history`
+    : ` · No command hints: ${sd.reason || "none found in the flashed image"}`;
   fill(D.hint, agentHolds
-    ? `${who(b.lease.holder)} holds this board. Lines you send go to ${where}, marked as yours; the agent keeps the board.${tips}`
-    : `Commands go to ${where}.${tips}`);
+    ? [h("b", {}, who(b.lease.holder)), " keeps the board; your lines are marked as yours", tips]
+    : [`Sends to the ${where}`, tips]);
 }
 
 // ------------------------------------------------------------------ shell commands
@@ -689,7 +760,6 @@ async function sendLine() {
 function renderQueue(b) {
   const q = queueFor(b);
   const all = state.queue || [];
-  fill(D.queueCount, q.length ? String(q.length) : "");
   renderIf(D.queue, JSON.stringify(q.map((e) => [e.ticket, e.priority, e.pinned, Math.floor(e.waiting_s / 10)])), () => {
     if (!q.length) return h("div", { class: "empty" }, "Nobody is waiting for this board.");
     const qa = (e, action, body, label) => act(label, () => api("POST", `/api/admin/queue/${e.ticket}/${action}`, body || {}));
@@ -736,8 +806,7 @@ function renderPower(b) {
     const m = p.last;
     const hist = powerHist[b.id] || [];
     const stat = (k, v) => h("div", { class: "stat" }, h("div", { class: "k" }, k), h("div", { class: "big" }, v));
-    return h("div", { class: "card" },
-      h("h2", {}, "Power ", h("span", { class: "count" }, p.kind)),
+    return h("div", { class: "power-panel" },
       h("div", { class: "power-top" },
         h("span", { class: `pill ${p.fault ? "err" : p.on ? "busy" : "warn"}` }, h("span", { class: "dot" }), p.fault ? `Fault: ${p.fault}` : p.on ? "On" : "Off"),
         p.mv ? h("span", { class: "big" }, `${(p.mv / 1000).toFixed(2)} V`) : null,
@@ -1713,6 +1782,10 @@ function prefsPanel() {
       if (on && "Notification" in window && Notification.permission === "default") Notification.requestPermission().then(() => { delete $("#settings").dataset.key; renderSettings(); });
     }, perm === "denied" ? "Blocked by the browser. Allow notifications for this page in the browser's site settings."
       : perm === "unsupported" ? "This browser doesn't support them." : "For approvals and warnings while this tab is in the background."),
+    h("h3", {}, "Getting started"),
+    h("div", { class: "toggle-row", style: "cursor: default" },
+      h("span", {}, h("span", { class: "label" }, "Getting started guide"), h("span", { class: "hint" }, "Boards, health check, connecting agents and a short tour.")),
+      h("button", { class: "small", onclick: () => guide.open() }, "Show the guide")),
     h("div", { class: "btn-row", style: "margin-top: var(--s4)" },
       h("button", { class: "small", onclick: () => {
         for (const [k, , d] of VIEW_OPTS) view[k] = d;
@@ -1721,6 +1794,170 @@ function prefsPanel() {
         applyView(); applyPrefs(); renderSettings();
       } }, "Reset to defaults")));
 }
+
+// ------------------------------------------------------------------ getting started
+// A short walkthrough that opens by itself the first time this browser opens the
+// dashboard. Skipping or finishing it is remembered; the ⋯ menu and Settings reopen it.
+const GUIDE_KEY = "arbiter.onboarded";
+const guide = {
+  step: 0,
+  doctor: null, // null not run, "busy", false no such route, or the reply
+  key: null,
+  STEPS: [
+    ["board", "Boards", "sage"],
+    ["health", "Health check", "peach"],
+    ["agents", "Connect agents", "lilac"],
+    ["tour", "Using the board", "pink"],
+  ],
+
+  seen() {
+    try { return !!localStorage.getItem(GUIDE_KEY); } catch (e) { return true; }
+  },
+
+  maybeOpen() {
+    if (this.auto || this.seen() || page !== "dash" || $("#guide").open || $("#sheet").open) return;
+    this.auto = true;
+    this.open();
+  },
+
+  open(name) {
+    const i = this.STEPS.findIndex(([k]) => k === name);
+    this.step = i < 0 ? 0 : i;
+    this.key = null;
+    this.render();
+    if (!$("#guide").open) $("#guide").showModal();
+  },
+
+  close() {
+    try { localStorage.setItem(GUIDE_KEY, String(Math.floor(Date.now() / 1000))); } catch (e) { /* no storage */ }
+    if ($("#guide").open) $("#guide").close();
+  },
+
+  go(i) {
+    this.step = Math.max(0, Math.min(this.STEPS.length - 1, i));
+    this.key = null;
+    this.render();
+  },
+
+  async runDoctor() {
+    this.doctor = "busy";
+    this.key = null;
+    this.render();
+    try { this.doctor = await api("GET", "/api/admin/doctor"); } catch (e) { this.doctor = e.status === 404 ? false : { error: e.message }; }
+    this.key = null;
+    this.render();
+  },
+
+  // Open Settings with the new-board form filled in from a probe (or as a simulated board).
+  addBoard(draft) {
+    this.close();
+    location.hash = "#settings";
+    showPage();
+    startEdit("new");
+    Object.assign(edit.values, Object.fromEntries(Object.entries(draft).map(([k, v]) => [`new.${k}`, v])));
+    edit.rev++;
+    renderSettings();
+    updateForm();
+  },
+
+  render() {
+    const dlg = $("#guide");
+    if (!state) return;
+    const [name, title, tint] = this.STEPS[this.step];
+    const key = JSON.stringify([this.step, name === "board" ? [state.boards.map((b) => [b.id, b.state]), state.unassigned_probes] : null, this.doctor && this.doctor.at]);
+    if (dlg.open && this.key === key) return;
+    this.key = key;
+    const last = this.step === this.STEPS.length - 1;
+    fill(dlg,
+      h("div", { class: `guide-head ${tint}` },
+        h("div", { class: "guide-steps" }, this.STEPS.map(([, t], i) => h("button", {
+          class: `step ${i === this.step ? "on" : i < this.step ? "done" : ""}`, onclick: () => this.go(i), "aria-label": t,
+        }, String(i + 1)))),
+        h("div", { class: "k" }, this.step === 0 ? "Welcome to arbiter" : `Step ${this.step + 1} of ${this.STEPS.length}`),
+        h("h2", { id: "guide-title" }, title)),
+      h("div", { class: "guide-body" }, this[name]()),
+      h("div", { class: "guide-foot" },
+        h("button", { class: "link", onclick: () => this.close() }, last ? "Close" : "Skip the guide"),
+        h("span", { class: "spacer" }),
+        this.step ? h("button", { onclick: () => this.go(this.step - 1) }, "Back") : null,
+        h("button", { class: "primary", onclick: () => (last ? this.close() : this.go(this.step + 1)) }, last ? "Done" : "Next")));
+  },
+
+  board() {
+    const norm = (x) => String(x || "").replace(/^0+/, "");
+    const known = new Set(state.boards.map((b) => norm(b.serial || b.probe_serial)).filter(Boolean));
+    const probes = (state.unassigned_probes || []).filter((p) => !known.has(norm(p.serial)));
+    const driver = (p) => ({ jlink: "nrf", stlink: "stm32" }[p.kind] || "west");
+    return [
+      h("p", { class: "lead" }, "arbiter shares your dev boards between AI agents and you. ",
+        state.boards.length ? "These boards are set up:" : "No board is set up yet."),
+      state.boards.length ? h("div", { class: "guide-list" }, state.boards.map((b) =>
+        h("div", { class: "row" }, h("b", { class: "name" }, b.id), h("span", { class: "mono muted" }, b.platform), statusPill(b)))) : null,
+      probes.length ? [
+        h("p", {}, h("b", {}, plural(probes.length, "probe")), " plugged in but not set up:"),
+        h("div", { class: "guide-list" }, probes.map((p, i) => h("div", { class: "row" },
+          h("b", { class: "mono" }, p.serial), h("span", { class: "muted" }, p.kind),
+          h("button", { class: "small primary", onclick: () => this.addBoard({ id: `board-${state.boards.length + i + 1}`, driver: driver(p), platform: p.board || "", probe_serial: norm(p.serial) }) }, "Add")))),
+      ] : null,
+      h("p", { class: "muted" }, "To detect boards from a terminal instead, run ", h("code", {}, "arbiter init --write"), " and restart arbiterd."),
+      h("div", { class: "btn-row" },
+        h("button", { class: "small", onclick: () => this.addBoard({ id: "native-1", driver: "sim", platform: "native_sim" }) }, "Add a simulated board"),
+        h("button", { class: "small", onclick: () => { this.close(); location.hash = "#settings"; } }, "Open board settings")),
+    ];
+  },
+
+  health() {
+    const d = this.doctor;
+    const checks = d && d.checks ? d.checks : [];
+    const bad = checks.filter((c) => c.status !== "OK");
+    const n = (st) => checks.filter((c) => c.status === st).length;
+    return [
+      h("p", { class: "lead" }, "Checks the tools, probes and serial ports each board needs. Probes held by an agent are left alone."),
+      d === null || d === "busy" ? h("button", { class: "primary", disabled: d === "busy", onclick: () => this.runDoctor() }, d === "busy" ? "Checking…" : "Run the health check") :
+      d === false ? h("p", { class: "muted" }, "This arbiterd can't run it from here. Run ", h("code", {}, "arbiter doctor"), " in a terminal.") :
+      d.error ? h("p", { class: "err" }, d.error) :
+      [
+        h("div", { class: "tally" },
+          h("span", { class: "t ok" }, h("b", {}, String(n("OK"))), " OK"),
+          h("span", { class: `t ${n("WARN") ? "warn" : ""}` }, h("b", {}, String(n("WARN"))), " warnings"),
+          h("span", { class: `t ${n("FAIL") ? "err" : ""}` }, h("b", {}, String(n("FAIL"))), " failed")),
+        bad.length ? h("div", { class: "checks" }, bad.slice(0, 5).map((c) => h("div", { class: `check-row ${c.status === "FAIL" ? "err" : "warn"}` },
+          h("span", { class: "st" }, c.status), h("span", { class: "n" }, c.name), h("span", { class: "d" }, c.detail || "")))) :
+          h("p", {}, h("b", {}, "Everything passed.")),
+        h("button", { class: "small", onclick: () => this.runDoctor() }, "Run again"),
+      ],
+    ];
+  },
+
+  agents() {
+    const copy = (text) => h("button", { class: "small", onclick: (ev) => {
+      const btn = ev.currentTarget;
+      const done = () => { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy"; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => toast("Copy failed; select the text instead", "warn"));
+    } }, "Copy");
+    const cmd = (text) => h("div", { class: "cmd-box" }, h("pre", {}, text), copy(text));
+    return [
+      h("p", { class: "lead" }, "Agents ask arbiter for a board, then flash, test and read the console through it."),
+      h("h3", {}, "Claude Code"),
+      cmd("/plugin marketplace add famesy/arbiter\n/plugin install arbiter@arbiter"),
+      h("p", { class: "muted" }, "Then run ", h("code", {}, "/arbiter:setup"), " once. Every session after that starts arbiterd on its own."),
+      h("h3", {}, "Codex"),
+      cmd("[mcp_servers.arbiter]\ncommand = \"arbiter\"\nargs = [\"mcp\"]\nenv = { ARBITER_AGENT_KIND = \"codex\" }\nstartup_timeout_sec = 20\ntool_timeout_sec = 60"),
+      h("p", { class: "muted" }, "Add it to ", h("code", {}, "~/.codex/config.toml"), " and copy ", h("code", {}, "codex/AGENTS.md"), " into your firmware repo."),
+    ];
+  },
+
+  tour() {
+    const item = (n, t, d) => h("div", { class: "tour-item" }, h("span", { class: "n" }, n), h("div", {}, h("b", {}, t), h("div", { class: "muted" }, d)));
+    return [
+      h("p", { class: "lead" }, "Pick a board on the left. Its terminal fills the page."),
+      item("1", "Type into the terminal", "Lines you send are marked as yours, even while an agent holds the board."),
+      item("2", "Tab suggests shell commands", "They come from the flashed image. ↑ recalls earlier lines."),
+      item("3", "Pause or take over", "The button next to the board's name. More actions are under Actions."),
+      item("4", "Queue, power and tests", "Tap the chips under the terminal for details."),
+    ];
+  },
+};
 
 // ------------------------------------------------------------------ notifications
 function toast(text, level) {
@@ -1769,12 +2006,18 @@ $("#login-form").addEventListener("submit", (ev) => {
 });
 
 $("#pause-all").addEventListener("click", async () => {
+  $("#more").open = false;
   const held = state.boards.filter((b) => b.state === "LEASED");
   if (!held.length || !confirm(`Pause ${held.length} agent${held.length === 1 ? "" : "s"}? Flashes in progress finish first.`)) return;
   await Promise.all(held.map((b) => act(`Pause ${b.id}`, () => api("POST", `/api/admin/boards/${encodeURIComponent(b.id)}/pause`, { reason: "pause all" }))));
 });
 
 $("#feed-filter").addEventListener("change", () => setPref("feedOnly", $("#feed-filter").checked));
+$("#sheet-close").addEventListener("click", closeSheet);
+$("#sheet").addEventListener("close", closeSheet);
+// A click on the dimmed backdrop (the dialog itself, outside its content) closes it.
+$("#sheet").addEventListener("click", (ev) => { if (ev.target === $("#sheet")) closeSheet(); });
+$("#open-guide").addEventListener("click", () => { $("#more").open = false; guide.open(); });
 
 // Lease countdowns tick locally between state updates.
 setInterval(() => { if (state && !$("#app").hidden) render(); }, 1000);

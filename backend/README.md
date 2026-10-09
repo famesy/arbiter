@@ -68,6 +68,40 @@ with a tab per console channel, the queue, power, test runs and an activity feed
 pause, take over, give back or revoke, reorder the queue and type into the console. Set
 `ARBITER_DASHBOARD_DIR` to serve a different copy while working on it.
 
+## Terminal UI
+
+```sh
+pip install -e "./backend[tui]"   # adds Textual
+arbiter tui                       # or: arbiter tui nrf9161dk --channel uart:app
+```
+
+The board console fills the terminal. One status line on top shows the board, its
+holder and lease time, the queue length, power and whether the daemon is connected; with
+more than one board it doubles as the board switcher (F2). Type a line and press Enter to
+send it, also while an agent holds the board (it shows as `[you]`, agents as
+`[claude-xxxx]`). Tab completes the shell commands of the flashed image and Up/Down
+recall earlier lines. Warnings stay yellow and errors red even with the firmware's log
+colours off. The footer lists the keys that apply right now:
+
+| Key | Does |
+|---|---|
+| F2 | next board |
+| F3 | next console channel |
+| F4 | queue: move (u/d), priority (p), cancel (x) |
+| F5 | take the board, take over from an agent, or give it back |
+| F6 | pause or resume the agent |
+| F7 | view: fold boot output, timestamps, shell prompts (kept in `tui.json` in the state dir) |
+| F8 | reset the board (when you can drive it) |
+| F9 | answer agents' requests |
+| PgUp/PgDn, Ctrl+L, Ctrl+Q | scroll, clear, quit |
+
+Everything works with the mouse too: click a board name or "queue N" in the status line,
+click a key in the footer (take over, give back, pause...), click a shell suggestion,
+use the buttons in the queue and requests popups, click a folded "Booted ..." line to open
+it, scroll with the wheel, and drag over the console to select text (Ctrl+C copies it;
+in Windows Terminal Shift+drag still gives the terminal's own selection). Settings stay
+in the web dashboard.
+
 ## Connect an agent
 
 **Claude Code.** Register the MCP server and the hooks:
