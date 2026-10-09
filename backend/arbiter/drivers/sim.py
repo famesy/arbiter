@@ -120,6 +120,8 @@ class SimDriver(BoardDriver):
             self._out("Zephyr version 3.6.99\r\n")
         elif line == "kernel uptime":
             self._out(f"Uptime: {int(up * 1000)} ms\r\n")
+        elif line == "kernel thread list":
+            self._out(SIM_THREADS)
         elif line == "device list":
             self._out("devices:\r\n- uart@8000 (READY)\r\n- gpio@842500 (READY)\r\n")
         elif line == "test":
@@ -189,6 +191,12 @@ class SimDriver(BoardDriver):
                     "Kernel commands",
                     1,
                     subcommands=[
+                        c(
+                            "thread",
+                            "Thread commands.",
+                            1,
+                            subcommands=[c("list", "List kernel threads.", 1)],
+                        ),
                         c("uptime", "Kernel uptime.", 1),
                         c("version", "Kernel version.", 1),
                     ],
@@ -288,6 +296,28 @@ class SimDriver(BoardDriver):
             if self._boot_task:
                 self._boot_task.cancel()
             self.powered = False
+
+
+# `kernel thread list` with CONFIG_THREAD_STACK_INFO and CONFIG_INIT_STACKS: the system
+# work queue is close to overflowing.
+SIM_THREADS = (
+    "Scheduler: 2 since last call\r\n"
+    "Threads:\r\n"
+    "*0x20000c08 shell_uart\r\n"
+    "\toptions: 0x0, priority: 14 timeout: 0\r\n"
+    "\tstate: queued, entry: 0x0000b1c5\r\n"
+    "\tstack size 2048, unused 1272, usage 776 / 2048 (37 %)\r\n"
+    "\r\n"
+    " 0x20000d28 sysworkq\r\n"
+    "\toptions: 0x0, priority: -1 timeout: 0\r\n"
+    "\tstate: pending, entry: 0x0000c2a1\r\n"
+    "\tstack size 1024, unused 96, usage 928 / 1024 (90 %)\r\n"
+    "\r\n"
+    " 0x20000b48 idle\r\n"
+    "\toptions: 0x1, priority: 15 timeout: 0\r\n"
+    "\tstate: , entry: 0x0000a0f1\r\n"
+    "\tstack size 320, unused 256, usage 64 / 320 (20 %)\r\n"
+)
 
 
 # Replies of a registered nRF9161 on LTE-M, for the `at` shell command. "" means just OK.

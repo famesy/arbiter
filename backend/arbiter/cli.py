@@ -365,6 +365,22 @@ def cmd_decode(args: argparse.Namespace) -> int:
     return 0 if res.get("ok") else 1
 
 
+def cmd_threads(args: argparse.Namespace) -> int:
+    c = Client()
+    res = c.post("/api/threads", {"lease_token": _lease(c, args), "warn_pct": args.warn})
+    if args.json:
+        _print(res, True)
+        return 0
+    for th in res.get("threads") or []:
+        pct = th.get("stack_pct")
+        used = f"{th['stack_used']}/{th['stack_size']} B ({pct} %)" if pct is not None else "?"
+        print(f"{th['name'] or th.get('addr', '?'):<20} {used}")
+    for line in [*(res.get("warnings") or []), res.get("hint")]:
+        if line:
+            print(line, file=sys.stderr)
+    return 0 if res.get("ok") else 1
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
     if not cmd:
@@ -820,6 +836,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--last-good", action="store_true", help="last passing run and what changed")
     sp.add_argument("--build", help="with --last-good: diff Kconfig against this build")
+    sp = add("threads", cmd_threads, "stack use of every thread on your board")
+    sp.add_argument("--warn", type=int, default=80, help="warn at this stack use (%%)")
+    sp.add_argument("--lease")
     sp = add("decode-log", cmd_decode, "decode dictionary logging captured since the last flash")
     sp.add_argument("--build", help="the flashed build dir, if arbiter didn't flash it")
     sp.add_argument("--channel")
