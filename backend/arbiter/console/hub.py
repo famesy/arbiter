@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from dataclasses import dataclass, field
+import time
+from collections import deque
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Any, Protocol
 
@@ -32,6 +34,41 @@ ANY = "any"
 NOT_IN_ALL = {"uart:tfm", "modem-trace"}
 BINARY = {"modem-trace"}
 WRITE_ORDER = ("uart:app", "rtt")
+NOTE_DELAY_S = 0.3  # how long a note waits for the device to finish its current line
+PARTIAL_WAIT_S = 2.0  # how long a write waits for another writer to finish its line
+
+
+@dataclass(frozen=True)
+class Sender:
+    """Who wrote to a board. `tag` is what the terminal shows: [you] for the human,
+    [claude-1a2b] for an agent session."""
+
+    kind: str  # human | agent
+    tag: str
+    name: str = ""
+    session: str | None = None
+
+    @staticmethod
+    def human(name: str = "") -> Sender:
+        return Sender("human", "you", name)
+
+
+@dataclass
+class WriteRecord:
+    """One write to a board, kept so readers can tell input from different senders apart.
+    `cursor` is the channel's end when the bytes went out: output after it may answer it."""
+
+    seq: int
+    at: float
+    sender: Sender
+    channel: str
+    data: str
+    cursor: int
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["sender"] = {k: v for k, v in d["sender"].items() if v}
+        return d
 
 
 class ConsoleSource(Protocol):
@@ -97,6 +134,13 @@ class ConsoleHub:
         self.lent: str | None = None
         self._changed = asyncio.Event()
         self._all = self._channel(ALL)
+        self._notes: list[bytes] = []
+        self._note_timer: asyncio.TimerHandle | None = None
+        self.writes: deque[WriteRecord] = deque(maxlen=500)
+        self._write_seq = 0
+        self._write_lock = asyncio.Lock()
+        self._partial: tuple[Sender, str] | None = None  # a writer mid-line, and its channel
+        self._line_done = asyncio.Event()
 
     # ------------------------------------------------------------- channels
     def _channel(self, name: str) -> Channel:
@@ -168,13 +212,41 @@ class ConsoleHub:
         self._channel(source).append(data)
         if source not in NOT_IN_ALL and source not in BINARY:
             self._all.append(self._tag(data, source))
+        if self._notes:
+            self._flush_notes(force=False)
         self._wake()
 
     def annotate(self, text: str) -> None:
-        """Out-of-band note, e.g. "[agent:claude-1] > help", shown dim in terminals."""
-        line = f"\x1b[2m{text}\x1b[0m\n".encode()
-        for ch in (self._channel(self.primary), self._all):
-            ch.append((b"" if ch.at_line_start else b"\n") + line)
+        """Out-of-band note, e.g. "[claude-1a2b] > help", shown dim in terminals.
+
+        A note never splits a device line: while the device is mid-line it waits for the
+        line to end, or NOTE_DELAY_S at most (a shell prompt never ends its line)."""
+        self._notes.append(f"\x1b[2m{text}\x1b[0m\n".encode())
+        self._flush_notes(force=False)
+
+    def _note_targets(self) -> tuple[Channel, Channel]:
+        return self._channel(self.primary), self._all
+
+    def _flush_notes(self, force: bool) -> None:
+        targets = self._note_targets()
+        if not force and not all(ch.at_line_start for ch in targets):
+            if self._note_timer is None:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    force = True
+                else:
+                    self._note_timer = loop.call_later(NOTE_DELAY_S, self._flush_notes, True)
+                    return
+            if not force:
+                return
+        if self._note_timer is not None:
+            self._note_timer.cancel()
+            self._note_timer = None
+        notes, self._notes = self._notes, []
+        for line in notes:
+            for ch in targets:
+                ch.append((b"" if ch.at_line_start else b"\n") + line)
         self._wake()
 
     def _tag(self, data: bytes, source: str) -> bytes:
@@ -207,13 +279,60 @@ class ConsoleHub:
         return ch.read(cursor, max_bytes)
 
     # -------------------------------------------------------------- output
-    async def write(self, data: bytes, who: str, channel: str | None = None) -> None:
+    async def write(self, data: bytes, sender: Sender, channel: str | None = None) -> WriteRecord:
+        """Send bytes to the board, tagged with who sent them. Writes never interleave:
+        while one sender is mid-line (no newline yet), others wait for it to finish the
+        line, up to PARTIAL_WAIT_S."""
         src = self._writable(channel)
-        shown = data.decode(errors="replace").rstrip("\r\n")
-        self.annotate(
-            f"[{who}] > {shown}" + (f"  ({src.name})" if src.name != self.primary else "")
-        )
-        await src.write(data)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + PARTIAL_WAIT_S
+        while self._partial is not None and self._partial[0] != sender:
+            ev = self._line_done
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(ev.wait(), remaining)
+        async with self._write_lock:
+            src = self._writable(channel)
+            shown = data.decode(errors="replace").rstrip("\r\n")
+            if shown:
+                self.annotate(
+                    f"[{sender.tag}] > {shown}"
+                    + (f"  ({src.name})" if src.name != self.primary else "")
+                )
+            self._write_seq += 1
+            rec = WriteRecord(
+                self._write_seq,
+                time.time(),
+                sender,
+                src.name,
+                data.decode(errors="replace"),
+                self.end(src.name),
+            )
+            self.writes.append(rec)
+            await src.write(data)
+            if data.endswith((b"\n", b"\r")):
+                if self._partial is not None:
+                    self._partial = None
+                    self._line_done.set()
+                    self._line_done = asyncio.Event()
+            else:
+                self._partial = (sender, src.name)
+            return rec
+
+    def writes_since(
+        self, since: dict[str, int] | int, channels: list[str], kind: str | None = None
+    ) -> list[WriteRecord]:
+        """Writes to `channels` at or after the given cursors."""
+        out = []
+        for w in self.writes:
+            if w.channel not in channels or (kind and w.sender.kind != kind):
+                continue
+            start = since.get(w.channel, 0) if isinstance(since, dict) else since
+            if w.cursor >= start:
+                out.append(w)
+        return out
 
     def _writable(self, channel: str | None) -> ConsoleSource:
         if self.lent:

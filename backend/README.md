@@ -43,7 +43,13 @@ everything without hardware. For real boards, copy
 
 On Windows with nRF Connect SDK, set `daemon.toolchain_env` to the toolchain bundle's
 `environment.json`, because `west` and `nrfutil` are not on PATH outside nRF Connect's
-own terminal.
+own terminal. `arbiter doctor` checks the config, the tools each board needs, the probes
+and the daemon, and exits 1 when something an agent needs is missing.
+
+`west flash` runs in the west workspace the build was made with, which it finds from
+`ZEPHYR_BASE` in the build's `CMakeCache.txt`, so apps outside the NCS folder flash
+fine. Set `zephyr_base` on a board (or in `[daemon]`) only for builds that don't
+record it.
 
 ## Dashboard
 
@@ -122,7 +128,14 @@ arbiter resume nrf9161dk-1
 arbiter queue                          # show the queue
 arbiter queue move <ticket> 1           # also: priority, pin, unpin, cancel
 arbiter supply nrf9161dk-1 cycle
+arbiter send nrf9161dk-1 "kernel uptime"   # type a line without taking the board
 ```
+
+You can type into a board's console while an agent holds it. Your lines show as
+`[you] > ...` and the agent's as `[claude-1a2b] > ...`. Writes never interleave
+mid-line. The agent gets an inbox note, and its `serial_expect` and `console_read`
+results list your lines under `human_input`, so it can tell your command's reply from
+its own.
 
 ## Customising
 

@@ -48,6 +48,8 @@ class Timing:
     ticket_ttl_s: float = 90
     claim_timeout_s: float = 120
     max_wait_s: float = 45
+    # A session holding nothing is dropped after this long without hearing from it.
+    idle_session_s: float = 60 * 60
 
 
 @dataclass
@@ -195,6 +197,10 @@ class Scheduler:
         self._changed.set()
         self._changed = asyncio.Event()
 
+    def notify(self, session_id: str, kind: str, text: str, **data: Any) -> None:
+        """Put a note in a session's inbox."""
+        self._notify(session_id, kind, text, **data)
+
     def _notify(self, session_id: str, kind: str, text: str, **data: Any) -> None:
         s = self.sessions.get(session_id)
         if not s:
@@ -318,6 +324,7 @@ class Scheduler:
         s = self.session(session_id)
         s.last_heartbeat = self.clock()
         s.heartbeat = True
+        s.ended = False  # dropped as stale while asleep, and now back
         if not s.alive:
             s.alive = True
             self._revive(s)
@@ -881,6 +888,22 @@ class Scheduler:
         return e
 
     # --------------------------------------------------------------- the clock
+    def _drop_stale_sessions(self, now: float) -> None:
+        """End sessions that are gone and hold nothing, so they leave the agents list: a
+        killed agent once its grace has passed, a CLI session after idle_session_s."""
+        for s in list(self.sessions.values()):
+            if s.ended or s.agent_kind == "human":
+                continue
+            if self.leases_of(s.id) or any(e.session_id == s.id for e in self.queue):
+                continue
+            idle = now - s.last_heartbeat
+            gone = (
+                s.heartbeat and not s.alive and idle > self.t.heartbeat_timeout_s + self.t.grace_s
+            )
+            if gone or idle > self.t.idle_session_s:
+                s.ended, s.alive = True, False
+                self.emit("session.ended", session=s.id, reason="stale")
+
     def tick(self) -> None:
         now = self.clock()
         for s in self.sessions.values():
@@ -895,6 +918,7 @@ class Scheduler:
                 for lease in self.leases_of(s.id):
                     if lease.state == ACTIVE:
                         self._start_grace(lease)
+        self._drop_stale_sessions(now)
         changed = False
         for lease in list(self.leases.values()):
             if lease.state == EXPIRING and lease.grace_until and now >= lease.grace_until:

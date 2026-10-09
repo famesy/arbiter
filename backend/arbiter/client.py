@@ -148,3 +148,44 @@ class AsyncClient:
 
     async def aclose(self) -> None:
         await self.http.aclose()
+
+
+def external_id() -> str | None:
+    """Who this agent is, across processes. An explicit ARBITER_EXTERNAL_ID wins, so tools
+    started from inside one agent session (subagents, test harnesses) can be told apart."""
+    for name in ("ARBITER_EXTERNAL_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID"):
+        if os.environ.get(name):
+            return os.environ[name]
+    return None
+
+
+def agent_kind(default: str = "cli") -> str:
+    if os.environ.get("ARBITER_AGENT_KIND"):
+        return os.environ["ARBITER_AGENT_KIND"]
+    if os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDECODE"):
+        return "claude"
+    if os.environ.get("CODEX_SESSION_ID"):
+        return "codex"
+    return default
+
+
+def only_lease(info: dict[str, Any], acquire: str, wait: str) -> str:
+    """The one lease token in a session's info, or an error that says what to do instead.
+    `acquire` and `wait` name the command or tool to suggest ({ticket} is filled in)."""
+    tokens = [le["lease_token"] for le in info.get("leases", []) if "lease_token" in le]
+    if len(tokens) == 1:
+        return str(tokens[0])
+    if len(tokens) > 1:
+        raise ArbiterError("BAD_REQUEST", "you hold several boards; pass the lease token")
+    tickets = info.get("tickets") or []
+    if tickets:
+        # Typically a human took the board: the agent was put back at the head of the queue.
+        raise ArbiterError(
+            "LEASE_UNKNOWN",
+            f"you hold no board right now; you are queued with ticket {tickets[0]}",
+            hint="A human may have taken the board. "
+            + wait.format(ticket=tickets[0])
+            + " to get it back when it is free.",
+            ticket=tickets[0],
+        )
+    raise ArbiterError("LEASE_UNKNOWN", "you hold no board", hint=acquire + " first.")

@@ -24,6 +24,7 @@ from ..console.hub import ConsoleHub
 from ..console.sources import RttSource, UartSource
 from ..errors import ArbiterError
 from ..procs import run_proc, which
+from ..workspace import west_context
 from . import discovery
 from .base import BoardDriver, LineFn
 
@@ -45,6 +46,7 @@ class WestDriver(BoardDriver):
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
         super().__init__(cfg, hub, state_dir)
+        self.zephyr_base: str | None = cfg.zephyr_base  # last one west ran with
         if not cfg.probe_serial:
             raise ValueError(f"board {cfg.id}: probe_serial is required for driver {cfg.driver!r}")
 
@@ -150,17 +152,34 @@ class WestDriver(BoardDriver):
         if not build_dir.exists():
             raise ArbiterError("OP_FAILED", f"build dir not found: {build_dir}")
         argv = self.flash_argv(build_dir, domain, erase)
+        # `west flash` only exists inside a west workspace, so run it in the one the build
+        # was made with (from its CMakeCache.txt), not wherever the agent happens to be.
+        env, run_in = west_context(build_dir, self.cfg.zephyr_base, cwd or build_dir.parent)
+        if env.get("ZEPHYR_BASE"):
+            self.zephyr_base = env["ZEPHYR_BASE"]
         res = await run_proc(
             argv,
-            cwd=cwd or build_dir.parent,
+            cwd=run_in,
+            env=env,
             timeout_s=self.flash_timeout,
             log_path=log_path,
             on_line=on_line,
         )
         out = res.summary()
+        if not res.ok and any("unknown command" in line for line in res.tail):
+            out["hint"] = (
+                "west could not find its workspace. Set zephyr_base for this board (or "
+                "[daemon] zephyr_base) to the Zephyr tree, e.g. C:/ncs/v3.4.1/zephyr."
+            )
         if res.ok:
             out["console"] = (await self._after_flash(build_dir)).to_dict()
         return out
+
+    def run_env(self) -> dict[str, str]:
+        env = super().run_env()
+        if self.zephyr_base:
+            env["ZEPHYR_BASE"] = self.zephyr_base  # twister and west in tests need it too
+        return env
 
     async def _after_flash(self, build_dir: Path) -> ConsoleMap:
         cmap = detect_from_build(build_dir)

@@ -79,8 +79,12 @@ async def run_board(tmp_path: Path, build: Path) -> None:
         await until(lambda: drv.running)
         await arb.write(s, tok, "exit")
         await until(lambda: drv.last_exit == 3)
-        assert (
-            "native_sim exited with code 3" in arb.boards["ns-1"].hub.read(0, 1 << 16)[0].decode()
+        # The note waits briefly for the unfinished prompt line before it is written.
+        await until(
+            lambda: (
+                "native_sim exited with code 3"
+                in arb.boards["ns-1"].hub.read(0, 1 << 16)[0].decode()
+            )
         )
     finally:
         await arb.stop()
