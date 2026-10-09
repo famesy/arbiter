@@ -380,6 +380,7 @@ function renderDetail() {
     D.controls = h("div", { class: "controls btn-row" });
     D.tabs = h("div", { class: "tabs", role: "tablist" });
     D.term = h("pre", { id: "term", tabindex: "0" });
+    applyView();
     D.input = h("input", {
       placeholder: "Type a command, Enter to send",
       autocomplete: "off",
@@ -401,7 +402,7 @@ function renderDetail() {
     fill(root,
       h("div", { class: "card" }, D.head, D.controls),
       h("div", { class: "card" },
-        h("div", { class: "term-bar" }, h("h2", { style: "margin:0" }, "Terminal"), D.tabs),
+        h("div", { class: "term-bar" }, h("h2", { style: "margin:0" }, "Terminal"), h("div", { class: "btn-row" }, D.tabs, viewMenu())),
         D.term, form, D.help, D.hint),
       h("div", { class: "card" }, h("h2", {}, "Queue ", D.queueCount), D.queue),
       D.power,
@@ -508,6 +509,7 @@ function renderTabs(b) {
   const names = new Set(["all", ...((b.console && b.console.sources) || []), ...Object.keys((b.console_channels && b.console_channels.ends) || {})]);
   const prim = b.console_channels && b.console_channels.primary;
   const list = [...names];
+  term.names = names;
   renderIf(D.tabs, JSON.stringify([list, term.channel, prim]), () => list.map((n) => h("button", {
     class: n === term.channel ? "on" : "",
     role: "tab",
@@ -795,6 +797,8 @@ const term = {
   dim: false,
   colour: "",
   lines: 0,
+  boot: null, // the boot block that the next boot line joins
+  names: new Set(), // channel names, to spot the "[uart:app] " prefix on the All tab
 
   open(board, channel) {
     this.close();
@@ -807,6 +811,7 @@ const term = {
     this.dim = false;
     this.colour = "";
     this.lines = 0;
+    this.boot = null;
     const dec = new TextDecoder();
     const ws = new WebSocket(wsUrl(`/api/boards/${encodeURIComponent(board)}/console?channel=${encodeURIComponent(channel)}&scrollback=65536`));
     ws.binaryType = "arraybuffer";
@@ -843,10 +848,10 @@ const term = {
     this.pending = parts.pop();
     const frag = document.createDocumentFragment();
     if (this.partial) { this.partial.remove(); this.partial = null; }
-    for (const line of parts) { frag.append(this.lineEl(line)); this.lines++; }
+    for (const line of parts) { this.add(frag, this.lineEl(line)); this.lines++; }
     if (this.pending) { this.partial = this.lineEl(this.pending, true); frag.append(this.partial); }
     el.append(frag);
-    while (this.lines > 5000 && el.firstChild) { el.firstChild.remove(); this.lines--; }
+    while (this.lines > 5000 && el.firstChild) { this.lines -= Number(el.firstChild.dataset.n || 1); el.firstChild.remove(); }
     if (stick) el.scrollTop = el.scrollHeight;
   },
 
@@ -892,10 +897,112 @@ const term = {
     if (/<err>|\bASSERTION FAIL|\bFATAL\b|Kernel panic|\bFAIL(ED)?\b/.test(text)) cls = "e";
     else if (/<wrn>|\bWARN(ING)?\b/.test(text)) cls = "w";
     else if (!sent && shown.colour) cls = shown.colour;
-    return h("div", { class: cls }, tag, text || "​");
+    let src = null;
+    let ts = null;
+    let prompt = null;
+    if (!sent) {
+      const c = /^\[([^\]\s]+)\] /.exec(text);
+      if (c && this.names.has(c[1]) && c[1] !== "all") { src = h("span", { class: "src" }, c[0]); text = text.slice(c[0].length); }
+      // Zephyr log timestamps ("[00:00:01.234,567] " or "[00012345] ") and shell prompts
+      // ("uart:~$ ") get their own spans so the view menu can hide them.
+      const t = /^\[(\d{2}:\d{2}:\d{2}\.\d{3}(,\d{3})?|\d{8})\] /.exec(text);
+      if (t) { ts = h("span", { class: "ts" }, t[0]); text = text.slice(t[0].length); }
+      const p = /^[\w.-]+:~\$ ?/.exec(text);
+      if (p) {
+        prompt = h("span", { class: "pr" }, p[0]);
+        text = text.slice(p[0].length);
+        if (!text.trim()) cls += " po"; // a bare prompt line
+      }
+    }
+    const boot = !partial && !sent ? bootLine(text, !!this.boot) : null;
+    // The bootloaders mark their own errors and warnings.
+    if (boot && /^(E: |\[ERR\])/.test(text)) cls = "e";
+    else if (boot && /^(W: |\[WRN\])/.test(text) && cls !== "e") cls = "w";
+    const div = h("div", { class: cls.trim() }, tag, src, ts, prompt, text || (src || ts || prompt ? "" : "​"));
+    div.boot = boot;
+    return div;
+  },
+
+  // Boot output (NSIB, MCUboot, TF-M, the Zephyr banner) is gathered into one block that
+  // the view menu shows folded as "Booted <title>". The lines themselves are unchanged.
+  add(frag, div) {
+    const b = div.boot;
+    if (!b) { this.boot = null; frag.append(div); return; }
+    if (!this.boot) {
+      const sum = h("div", { class: "sum", onclick: () => blk.classList.toggle("open") });
+      const body = h("div", { class: "body" });
+      const blk = h("div", { class: "boot" }, sum, body);
+      blk.dataset.n = "0";
+      this.boot = { blk, sum, body, title: "", lines: 0, level: "" };
+      frag.append(blk);
+    }
+    const g = this.boot;
+    g.body.append(div);
+    g.lines++;
+    g.blk.dataset.n = String(g.lines);
+    if (b.title) g.title = b.title;
+    if (div.classList.contains("e")) g.level = "e";
+    else if (div.classList.contains("w") && !g.level) g.level = "w";
+    g.sum.className = `sum ${g.level}`;
+    const issues = g.level === "e" ? ", has errors" : g.level === "w" ? ", has warnings" : "";
+    g.sum.textContent = `${g.title ? `Booted ${g.title}` : "Booting"} (${g.lines} line${g.lines === 1 ? "" : "s"}${issues})`;
   },
 
 };
+
+// Is this a line of boot output? Returns {title} (title may be "") or null. `inBoot` says a
+// boot block is already open, which lets the bootloaders' short log prefixes join it.
+function bootLine(text, inBoot) {
+  const t = text.trim();
+  let m = /^\*\*\* Booting (.+?) \*\*\*$/.exec(t);
+  if (m) return { title: m[1].replace(/^Zephyr OS build /, "Zephyr OS ") };
+  if (/^\*\*\* (Using|Booting) .*\*\*\*$/.test(t)) return { title: "" };
+  m = /^Booting TF-M (v\S+)/.exec(t);
+  if (m) return { title: `TF-M ${m[1]}` };
+  if (/Starting bootloader|^Attempting to boot|^\[Sec Thread\]|^\[INF\] .*TF-M/.test(t)) return { title: "" };
+  if (inBoot && (!t || /^[IWED]: /.test(t) || /^\[(INF|WRN|ERR|DBG)\]/.test(t) ||
+      /^(Verifying signature|Hash: 0x|Firmware (signature verified|version)|Booting \(0x|TF-M |Non-Secure system starting)/.test(t))) {
+    return { title: "" };
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------ terminal view
+// Display-only options, kept per browser. The console log itself is never changed.
+const VIEW_KEY = "arbiter.termView";
+const VIEW_OPTS = [
+  ["fold", "Fold boot output", true],
+  ["ts", "Show log timestamps", false],
+  ["prompt", "Show shell prompts", false],
+];
+const view = (() => {
+  const v = Object.fromEntries(VIEW_OPTS.map(([k, , d]) => [k, d]));
+  try { Object.assign(v, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* no storage */ }
+  return v;
+})();
+
+function applyView() {
+  if (!D.term) return;
+  D.term.classList.toggle("fold", !!view.fold);
+  D.term.classList.toggle("no-ts", !view.ts);
+  D.term.classList.toggle("no-prompt", !view.prompt);
+}
+
+function viewMenu() {
+  const menu = h("details", { class: "menu" },
+    h("summary", {}, "View"),
+    h("div", { class: "menu-body" }, VIEW_OPTS.map(([k, label]) => h("label", {},
+      h("input", {
+        type: "checkbox",
+        checked: !!view[k],
+        onchange: (ev) => {
+          view[k] = ev.target.checked;
+          try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) { /* no storage */ }
+          applyView();
+        },
+      }), label))));
+  return menu;
+}
 
 // ------------------------------------------------------------------ activity feed
 // lease.op duplicates op.started/op.finished; approval.requested arrives again as a notify.
@@ -1065,6 +1172,10 @@ setInterval(() => { if (state && !$("#app").hidden) render(); }, 1000);
 // A slow poll as a safety net in case an event is missed.
 setInterval(() => { if (token && !$("#app").hidden) refresh(); }, 15000);
 
+// Close an open menu on a click outside it.
+document.addEventListener("click", (ev) => {
+  for (const m of document.querySelectorAll("details.menu[open]")) if (!m.contains(ev.target)) m.open = false;
+});
 document.addEventListener("click", () => {
   if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
 }, { once: true });

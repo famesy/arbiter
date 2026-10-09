@@ -264,8 +264,47 @@ main {
 #term .a { color: #fff; box-shadow: inset 2px 0 0 var(--term-dim); margin: 1px -6px; padding: 0 6px; }
 #term .a .who { color: var(--term-dim); }
 #term .h { color: #fff; font-weight: 700; background: rgba(255, 255, 255, 0.09); border-radius: 4px; margin: 1px -6px; padding: 0 6px; }
+#term .src { color: var(--term-dim); }
 #term .w { color: var(--term-warn); }
 #term .e { color: var(--term-err); }
+#term.no-ts .ts, #term.no-prompt .pr, #term.no-prompt .po { display: none; }
+#term .boot .sum { display: none; cursor: pointer; color: var(--term-dim); user-select: none; }
+#term .boot .sum::before { content: "▸ "; }
+#term .boot .sum.w { color: var(--term-warn); }
+#term .boot .sum.e { color: var(--term-err); }
+#term.fold .boot .sum { display: block; }
+#term.fold .boot:not(.open) .body { display: none; }
+#term.fold .boot.open .sum::before { content: "▾ "; }
+#term.fold .boot.open .body { box-shadow: inset 2px 0 0 var(--term-dim); margin-left: -6px; padding-left: 6px; }
+.menu { position: relative; }
+.menu > summary {
+  list-style: none;
+  cursor: pointer;
+  min-height: 28px;
+  padding: 4px 12px;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+  user-select: none;
+}
+.menu > summary::-webkit-details-marker { display: none; }
+.menu > summary:hover { border-color: var(--fg); }
+.menu[open] > summary { background: var(--hover); }
+.menu-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--s1));
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  padding: var(--s1);
+  z-index: 5;
+  min-width: 210px;
+}
+.menu-body label { display: flex; gap: var(--s2); align-items: center; padding: 6px var(--s3); border-radius: var(--r-sm); cursor: pointer; font-size: 13px; white-space: nowrap; }
+.menu-body label:hover { background: var(--hover); }
 .term-input { display: flex; gap: var(--s2); margin-top: var(--s3); position: relative; }
 .suggest {
   position: absolute;
