@@ -24,6 +24,7 @@ from . import scheduler as sch
 from .config import BoardConfig, Config, config_from_dict, load_toolchain_env
 from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, image_dirs
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
+from .coredump import analyze, find_tools
 from .crash import REPEAT_WINDOW_S, Crash, CrashWatcher, image_info, symbolize
 from .drivers import discovery
 from .drivers.base import BoardDriver
@@ -813,6 +814,8 @@ class Arbiter:
         except Exception as e:  # symbols are a bonus: the raw report still goes out
             log.warning("crash symbolisation failed on %s: %s", rt.cfg.id, e)
             crash.hints.append(f"symbolisation failed: {e}")
+        if crash.coredump:
+            crash.coredump_report = await asyncio.to_thread(self._coredump, rt, crash)
         if self.store:
             self.store.put(f"crash:{rt.cfg.id}", crash.to_dict())
             self.store.audit("board.crash", {"board": rt.cfg.id, "crash": crash.brief()})
@@ -828,6 +831,16 @@ class Arbiter:
                 board=rt.cfg.id,
                 crash_id=crash.id,
             )
+
+    def _coredump(self, rt: BoardRuntime, crash: Crash) -> dict[str, Any]:
+        """Backtrace from the crash's #CD: lines with Zephyr's coredump tools and gdb."""
+        if rt.image is None:
+            return {"ok": False, "error": "arbiter doesn't know which ELF is on the board"}
+        tools = find_tools(Path(rt.image["image_dir"]), Path(rt.image["build_dir"]))
+        if isinstance(tools, str):
+            return {"ok": False, "error": tools}
+        work = self.cfg.log_dir / "crashes" / f"{rt.cfg.id}-{crash.id}"
+        return analyze(crash.coredump, Path(rt.image["elf"]), tools, work).to_dict()
 
     def _crash_since(
         self, rt: BoardRuntime, since: dict[str, int] | int, names: list[str] | None = None

@@ -564,6 +564,12 @@ def cmd_crash(args: argparse.Namespace) -> int:
             print(f"  {reg:<3} {crash['registers'][reg]}")
     for i, sym in enumerate(crash["symbols"].get("call_trace") or []):
         print(f"  #{i:<2} {sym['address']}  {sym['text']}")
+    core = crash.get("coredump_report") or {}
+    for f in core.get("backtrace") or []:
+        where = f" at {f['file']}:{f['line']}" if f.get("file") else ""
+        print(f"  bt#{f['frame']:<2} {f.get('function') or '??'}({f.get('args') or ''}){where}")
+    if core.get("error"):
+        print(f"  coredump: {core['error']}")
     for line in crash.get("details") or []:
         print(f"  {line}")
     for hint in crash.get("hints") or []:

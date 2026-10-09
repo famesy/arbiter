@@ -151,6 +151,12 @@ from the ELF you flashed, plus the log lines before it and config hints.
 Read the source at that line before changing anything. `[N times]` in the
 summary means a boot loop.
 
+For a full backtrace with arguments (and every thread's stack), build with
+`CONFIG_DEBUG_COREDUMP=y` and `CONFIG_DEBUG_COREDUMP_BACKEND_LOGGING=y`. The
+dump prints as `#CD:` lines; arbiter runs Zephyr's coredump tools and the
+build's gdb on them and puts the result in `coredump_report.backtrace`. No
+debugger or probe is needed.
+
 ## Power and current
 
 Only on boards with a power device (a PPK2 or a controllable supply);
