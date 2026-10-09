@@ -80,9 +80,10 @@ Windows 11). The classic console that `cmd.exe` opens on Windows 10 has a crampe
 fewer colours and no dim or italic text, so the TUI looks flat there; it says so when it
 starts in one.
 
-The board console fills the terminal. One status line on top shows the board, its
-holder and lease time, the queue length, power and whether the daemon is connected; with
-more than one board it doubles as the board switcher (F2). Type a line and press Enter to
+The board console fills most of the terminal, in the dashboard's pastel colours. A
+sidebar lists the boards with their state, holder and lease time, then the queue, power
+and agents' requests; F1 hides it, and terminals narrower than 96 columns get a one-line
+status bar instead. Type a line and press Enter to
 send it, also while an agent holds the board (it shows as `[you]`, agents as
 `[claude-xxxx]`). Tab completes the shell commands of the flashed image and Up/Down
 recall earlier lines. Warnings stay yellow and errors red even with the firmware's log
@@ -90,6 +91,7 @@ colours off. The footer lists the keys that apply right now:
 
 | Key | Does |
 |---|---|
+| F1 | show or hide the sidebar |
 | F2 | next board |
 | F3 | next console channel |
 | F4 | queue: move (u/d), priority (p), cancel (x) |
@@ -100,7 +102,7 @@ colours off. The footer lists the keys that apply right now:
 | F9 | answer agents' requests |
 | PgUp/PgDn, Ctrl+L, Ctrl+Q | scroll, clear, quit |
 
-Everything works with the mouse too: click a board name or "queue N" in the status line,
+Everything works with the mouse too: click a board or the queue in the sidebar (or the status line),
 click a key in the footer (take over, give back, pause...), click a shell suggestion,
 use the buttons in the queue and requests popups, click a folded "Booted ..." line to open
 it, scroll with the wheel, and drag over the console to select text (Ctrl+C copies it;

@@ -560,24 +560,45 @@ DONE = {
 class ArbiterTui(App[int]):
     TITLE = "arbiter"
     ENABLE_COMMAND_PALETTE = False
+    # The layout follows herdr and the Claude Code / Codex CLIs: a sidebar of boards,
+    # the console in a rounded pane, and a rounded input box with a quiet hint under it.
+    # Narrow terminals drop the sidebar for a one-line status bar.
     CSS = """
-    Screen { layout: vertical; }
-    #status { height: 1; background: $surface; padding: 0 1; }
-    ConsoleView { padding: 0 1; }
+    Screen { layout: vertical; padding: 0 1; }
+    #body { height: 1fr; }
+    #side {
+        width: 28; height: 1fr; padding: 0 1; margin-right: 1;
+        border: round #3a3633; border-title-color: $primary; border-title-style: bold;
+        border-subtitle-color: $text-muted;
+    }
+    #side.hidden { display: none; }
+    #main { width: 1fr; }
+    #status { height: 1; padding: 0 1; display: none; }
+    #status.on { display: block; }
+    #pane {
+        height: 1fr; padding: 0 1;
+        border: round #3a3633; border-title-color: $foreground;
+        border-subtitle-color: $text-muted;
+    }
     #suggest {
-        height: auto; max-height: 8; border: none; padding: 0;
+        height: auto; max-height: 8; border: none; padding: 0 1; margin: 0 1;
         background: $surface; display: none;
     }
     #suggest.open { display: block; }
-    #hint { height: 1; padding: 0 1; color: $text-muted; background: $surface; display: none; }
+    #prompt { height: 3; border: round #57524d; padding: 0 1; }
+    #prompt:focus-within { border: round $primary; }
+    #mark { width: 2; color: $primary; text-style: bold; }
+    #input, #input:focus {
+        height: 1; border: none; padding: 0; background: $background; background-tint: 0%;
+    }
+    #hint { height: 1; padding: 0 2; color: $text-muted; display: none; }
     #hint.on { display: block; }
-    #prompt { height: 1; background: $surface; }
-    #mark { width: 3; color: $primary; text-style: bold; padding-left: 1; }
-    #input { height: 1; border: none; padding: 0; background: $surface; }
-    #input:focus { border: none; }
+    Footer { background: $background; }
     """
+    WIDE = 96  # columns needed for the sidebar
     # One key, several bindings: the footer shows the one that fits the board's state.
     BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("f1", "toggle_side", "Boards", show=False, priority=True),
         Binding("f2", "next_board", "Board", priority=True),
         Binding("f3", "next_channel", "Channel", priority=True),
         Binding("f4", "queue", "Queue", priority=True),
@@ -614,18 +635,26 @@ class ArbiterTui(App[int]):
         self.api: AsyncClient | None = None
         self._refresh_pending = False
         self._console_key: tuple[str, str] | None = None
+        self.side_off = False  # F1 hides the sidebar
 
     # -------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
-        status = Static(id="status")
-        status.auto_links = False  # link colours would paint over the pastel chips
-        yield status
-        yield ConsoleView(self.view, id="console")
-        yield Suggest(id="suggest")
-        yield Static(id="hint")
-        with Horizontal(id="prompt"):
-            yield Static(">", id="mark")
-            yield ShellInput(id="input", placeholder="Type a command, Enter to send")
+        with Horizontal(id="body"):
+            side = Static(id="side")
+            side.auto_links = False
+            side.border_title = "arbiter"
+            yield side
+            with Vertical(id="main"):
+                status = Static(id="status")
+                status.auto_links = False  # link colours would paint over the pastel chips
+                yield status
+                with Vertical(id="pane"):
+                    yield ConsoleView(self.view, id="console")
+                yield Suggest(id="suggest")
+                with Horizontal(id="prompt"):
+                    yield Static(">", id="mark")
+                    yield ShellInput(id="input", placeholder="Type a command, Enter to send")
+                yield Static(id="hint")
         yield Footer(compact=True, show_command_palette=False)
 
     @property
@@ -959,7 +988,7 @@ class ArbiterTui(App[int]):
         if not text and b and b["state"] == "LEASED" and b.get("lease"):
             # You can type while an agent holds the board: the line goes to the console,
             # marked as yours, and the agent keeps its lease.
-            text = f"{who(b['lease'].get('holder'))} holds this board. Lines you send are marked [you]; the agent keeps the board."
+            text = f"{who(b['lease'].get('holder'))} keeps the board · your lines show as [you]"
         hint.update(Text(text))  # plain text: "[you]" is not markup
         hint.set_class(bool(text), "on")
         holder = who((b.get("lease") or {}).get("holder")) if b else ""
@@ -971,11 +1000,137 @@ class ArbiterTui(App[int]):
         self.input.disabled = bool(b and b["state"] == "OFFLINE")
 
     # -------------------------------------------------------------- status bar
+    def on_resize(self, event: events.Resize) -> None:
+        self.call_after_refresh(self.render_status)
+
+    def action_toggle_side(self) -> None:
+        self.side_off = not self.side_off
+        self.render_status()
+
     def render_status(self) -> None:
         # The 1 s timer can fire while the app is shutting down and its widgets are gone.
-        if self.ui_ready:
-            with contextlib.suppress(NoMatches):
-                self.base.query_one("#status", Static).update(self.status_text())
+        if not self.ui_ready:
+            return
+        with contextlib.suppress(NoMatches):
+            base = self.base
+            wide = self.size.width >= self.WIDE and not self.side_off
+            side = base.query_one("#side", Static)
+            status = base.query_one("#status", Static)
+            side.set_class(not wide, "hidden")
+            status.set_class(not wide, "on")
+            if wide:
+                side.update(self.side_text())
+                side.border_subtitle = self.live_text()
+            else:
+                status.update(self.status_text())
+            pane = base.query_one("#pane")
+            pane.border_title, pane.border_subtitle = self.pane_titles()
+
+    def live_text(self) -> Text:
+        return (
+            Text("● live", Style(color=SAGE))
+            if self.connected
+            else Text("○ reconnecting", Style(color=ERR))
+        )
+
+    def state_colour(self, b: dict[str, Any]) -> str:
+        level = board_status(b)[1]
+        return {"err": ERR, "warn": WARN}.get(level) or (
+            SAGE if b["state"] == "AVAILABLE" else PEACH
+        )
+
+    def pane_titles(self) -> tuple[Text | None, Text | None]:
+        """The console pane's border: board and channel on top, the holder below."""
+        b = self.board
+        if b is None:
+            return None, None
+        title = Text(no_wrap=True)
+        title.append(b["id"], Style(color=PINK, bold=True))
+        title.append(f" · {self.channel}", DIM)
+        sub = Text(no_wrap=True)
+        text, _ = board_status(b)
+        sub.append("● ", Style(color=self.state_colour(b)))
+        sub.append(text)
+        lease = b.get("lease")
+        if lease and b["state"] != "HUMAN":
+            left_s = lease_left(b, self.now())
+            sub.append(f" · {who(lease.get('holder'))}" + (f" · {left_s}" if left_s else ""), DIM)
+        return title, sub
+
+    def side_text(self) -> Text:
+        """The sidebar, like herdr's agent list: each board with its state and holder,
+        then the selected board's queue, power and requests. Boards and the queue are
+        clickable."""
+        out = Text(no_wrap=True, overflow="ellipsis", end="")
+        width = 24
+
+        def line(
+            text: str, style: Style | str = "", bar: bool = False, meta: Style | None = None
+        ) -> None:
+            row = Text(no_wrap=True, overflow="ellipsis", end="")
+            row.append("▌ " if bar else "  ", Style(color=PINK))
+            row.append(text[: width - 2], style)
+            row.pad_right(width - row.cell_len)
+            if meta is not None:
+                row.stylize(meta)
+            out.append_text(row)
+            out.append("\n")
+
+        def head(text: str, meta: Style | None = None) -> None:
+            out.append("\n")
+            row = Text(text, Style(color=MUTED, bold=True), end="")
+            row.pad_right(width - row.cell_len)
+            if meta is not None:
+                row.stylize(meta)
+            out.append_text(row)
+            out.append("\n")
+
+        boards = self.state.get("boards") or []
+        head("BOARDS")
+        if not boards:
+            line("no boards configured" if self.connected else "connecting…", DIM)
+        for n, x in enumerate(boards):
+            if n:
+                out.append("\n")
+            on = x["id"] == self.selected
+            click = Style.from_meta({"@click": f"app.select_board({x['id']!r})"})
+            line(x["id"], Style(color=FG if on else MUTED, bold=on), on, click)
+            text, _ = board_status(x)
+            row_style = Style(color=self.state_colour(x))
+            line("● " + text, row_style, on, click)
+            lease = x.get("lease")
+            if lease and x["state"] != "HUMAN":
+                line("  " + who(lease.get("holder")), DIM, on, click)
+                left_s = lease_left(x, self.now())
+                if left_s:
+                    line("  " + left_s, DIM, on, click)
+        b = self.board
+        if b is None:
+            return out
+        q = queue_for(self.state, b)
+        click = Style.from_meta({"@click": "app.queue"})
+        head(f"QUEUE  {len(q)}", click)
+        if not q:
+            line("nobody waiting", DIM, meta=click)
+        for i, t in enumerate(q[:5], 1):
+            line(f"{i} {who(t.get('who'))}", Style(color=LILAC), meta=click)
+        if len(q) > 5:
+            line(f"+{len(q) - 5} more", DIM, meta=click)
+        p = b.get("power")
+        if p:
+            head("POWER")
+            if p.get("fault"):
+                line(f"fault: {p['fault']}", Style(color=ERR))
+            elif p.get("on"):
+                line(f"{(p.get('mv') or 0) / 1000:.2f} V")
+            else:
+                line("off", Style(color=WARN))
+        n = len(self.state.get("approvals") or [])
+        if n:
+            click = Style.from_meta({"@click": "app.requests"})
+            head("REQUESTS", click)
+            line(f"{n} waiting for you (F9)", Style(color=WARN, bold=True), meta=click)
+        return out
 
     def status_text(self) -> RenderableType:
         left = Text(no_wrap=True, overflow="ellipsis")
