@@ -41,7 +41,7 @@ MAX_TEXT = 8000  # characters of gdb output kept in the report
 
 _FRAME = re.compile(
     r"^#(?P<n>\d+)\s+(?:(?P<addr>0x[0-9a-fA-F]+) in )?(?P<func>[\w:~<>.$]+|\?\?)\s*"
-    r"\((?P<args>.*?)\)(?:\s+at\s+(?P<file>\S+?):(?P<line>\d+))?\s*$"
+    r"\((?P<args>.*?)\)(?:\s+at\s+(?P<file>\S+?):(?P<line>\d+)|\s+from\s+\S+)?\s*$"
 )
 _MISSING = (
     "Build with CONFIG_DEBUG_COREDUMP=y and CONFIG_DEBUG_COREDUMP_BACKEND_LOGGING=y "
