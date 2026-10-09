@@ -33,3 +33,18 @@ export function Pill({ text, tone = "" } = {}) {
 
 Add it to `components/index.js`, and add `ui/stories/<Name>.stories.js` with one story
 per variant.
+
+## What's there
+
+| File | Components |
+| --- | --- |
+| `brand.js` | Logo, Brand |
+| `controls.js` | Button, ButtonRow, Menu, CheckMenu, Tabs, NavTabs, Switch, ToggleRow, Check |
+| `status.js` | Pill, ConnPill, Tag, Alert, Issue, Toast, Empty |
+| `board.js` | BoardCard, ProbeChip, AgentRow, HolderRow, Chip, ChipStrip, BoardActions, BoardBar, KV |
+| `terminal.js` | Terminal, TermLine, BootBlock, Suggestions, CommandBar, TermCard |
+| `panels.js` | Sheet, QueueRow, QueueTable, Stat, StatStrip, Sparkline, PowerPanel, TestRunRow, TestRunsTable, EventRow |
+| `guide.js` | Guide, GuideContent, GuideList, GuideRow, Tally, CmdBox, TourItem |
+| `settings.js` | Section, Field, FieldGroup, CheckRow, BoardSettings |
+
+`Pages/Dashboard` puts them together as the terminal-first dashboard.
