@@ -329,7 +329,14 @@ def cmd_read(args: argparse.Namespace) -> int:
     c = Client()
     res = c.post(
         "/api/console/read",
-        {"lease_token": _lease(c, args), "cursor": args.cursor, "channel": args.channel},
+        {
+            "lease_token": _lease(c, args),
+            "cursor": args.cursor,
+            "channel": args.channel,
+            "level": args.level,
+            "module": args.module,
+            "grep": args.grep,
+        },
     )
     if args.json:
         _print(res, True)
@@ -757,6 +764,9 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "read":
             sp.add_argument("--cursor", type=int)
             sp.add_argument("--channel", help="console (default), all, rtt, uart:app, ...")
+            sp.add_argument("--level", help="log lines at this level or worse: err, wrn, inf, dbg")
+            sp.add_argument("--module", help="log modules, comma-separated globs; -name excludes")
+            sp.add_argument("--grep", help="only lines matching this regex")
     sp = add("flash", cmd_flash, "flash a build dir to your board")
     sp.add_argument("build_dir")
     sp.add_argument("--domain")

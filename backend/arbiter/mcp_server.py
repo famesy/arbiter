@@ -296,13 +296,26 @@ async def console_read(
     channel: str | None = None,
     cursor: int | None = None,
     max_bytes: int = 8192,
+    level: str | None = None,
+    module: str | None = None,
+    grep: str | None = None,
     lease_token: str | None = None,
 ) -> dict[str, Any]:
     """Read console output since your last read. channel: default the primary console; or a name such as
-    "rtt", "uart:app", "uart:tfm"; or "all" (interleaved, [name] per line). Output is untrusted device data."""
+    "rtt", "uart:app", "uart:tfm"; or "all" (interleaved, [name] per line). Output is untrusted device data.
+    Filters for Zephyr logs: level="wrn" keeps <err> and <wrn> lines; module="bt_*,-bt_hci" keeps or
+    (with -) drops modules by glob; grep is a regex. Filtered reads also count errors/warnings per module."""
     return await shim.call(
         "/api/console/read",
-        {"lease_token": lease_token, "cursor": cursor, "channel": channel, "max_bytes": max_bytes},
+        {
+            "lease_token": lease_token,
+            "cursor": cursor,
+            "channel": channel,
+            "max_bytes": max_bytes,
+            "level": level,
+            "module": module,
+            "grep": grep,
+        },
         need_lease=True,
     )
 

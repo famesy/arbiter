@@ -244,6 +244,9 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             body.get("cursor"),
             int(body.get("max_bytes", 8192)),
             body.get("channel"),
+            body.get("level"),
+            body.get("module"),
+            body.get("grep"),
         )
 
     async def console_expect(ctx: Ctx, body: Body) -> Any:
