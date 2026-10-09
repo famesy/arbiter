@@ -71,7 +71,7 @@ async def test_auth_levels(server):
         assert (await c.get("/api/state")).status_code == 401
         assert (await c.get("/api/state", headers=hdr(server["agent"]))).status_code == 200
         r = await c.post("/api/admin/boards/sim-1/take", headers=hdr(server["agent"]), json={})
-        assert r.status_code == 401 and r.json()["error"] == "UNAUTHORIZED"
+        assert r.status_code == 403 and r.json()["error"] == "FORBIDDEN"
         assert (
             await c.post("/api/admin/boards/sim-1/take", headers=hdr(server["admin"]), json={})
         ).status_code == 200

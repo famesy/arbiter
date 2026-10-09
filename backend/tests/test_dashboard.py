@@ -28,5 +28,5 @@ def test_dashboard_needs_no_token_but_api_does(tmp_path: Path):
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
         assert client.get("/api/state").status_code == 401
-        assert client.get("/api/admin/audit", params={"token": "agent"}).status_code == 401
+        assert client.get("/api/admin/audit", params={"token": "agent"}).status_code == 403
         assert client.get("/api/admin/audit", params={"token": "admin"}).status_code == 200

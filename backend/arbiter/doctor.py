@@ -25,9 +25,15 @@ class Check:
     status: str
     name: str
     detail: str = ""
+    board: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"status": self.status, "name": self.name, "detail": self.detail}
+        return {
+            "status": self.status,
+            "name": self.name,
+            "detail": self.detail,
+            "board": self.board,
+        }
 
 
 def jlink_exe() -> str:
@@ -63,11 +69,13 @@ def check_config(path: Path | None = None) -> tuple[list[Check], Config | None]:
     return [Check(OK, "config", f"{cfg.path}, {len(cfg.boards)} board(s)")], cfg
 
 
-def check_toolchain(cfg: Config) -> list[Check]:
+def check_toolchain(cfg: Config, apply: bool = True) -> list[Check]:
+    """`apply=False` checks the file without changing this process's environment (the
+    daemon applied it at start)."""
     if not cfg.toolchain_env:
         return []
     try:
-        applied = load_toolchain_env(cfg.toolchain_env)
+        applied = load_toolchain_env(cfg.toolchain_env, None if apply else dict(os.environ))
     except (OSError, ValueError) as e:
         return [Check(FAIL, "toolchain_env", f"{cfg.toolchain_env}: {e}")]
     return [Check(OK, "toolchain_env", f"{cfg.toolchain_env} ({len(applied)} variables)")]
@@ -160,13 +168,25 @@ def check_daemon() -> Check:
     return Check(WARN, "daemon", f"not answering at {conn[0]}; a stale daemon file?")
 
 
-def run_checks(path: Path | None = None) -> list[Check]:
+def run_checks(
+    path: Path | None = None, in_daemon: bool = False, running: Config | None = None
+) -> list[Check]:
+    """All checks. `in_daemon` is for the daemon's own /api/admin/doctor: it checks the
+    running config, leaves the process environment alone and doesn't ask itself whether
+    it is running."""
     checks = [check_python()]
-    cfg_checks, cfg = check_config(path)
-    checks += cfg_checks
+    if running is not None:
+        cfg: Config | None = running
+        where = running.path or "no config file; defaults"
+        checks.append(Check(OK, "config", f"{where}, {len(running.boards)} board(s)"))
+    else:
+        cfg_checks, cfg = check_config(path)
+        checks += cfg_checks
     if cfg is not None:
-        checks += check_toolchain(cfg)
+        checks += check_toolchain(cfg, apply=not in_daemon)
         for bc in cfg.boards:
-            checks += check_board(bc, cfg)
-    checks.append(check_daemon())
+            for c in check_board(bc, cfg):
+                c.board = bc.id
+                checks.append(c)
+    checks.append(Check(OK, "daemon", "running") if in_daemon else check_daemon())
     return checks

@@ -22,6 +22,7 @@ from . import __version__
 from .console.hub import Sender
 from .errors import ArbiterError
 from .plugins import available as available_plugins
+from .plugins import loaded as loaded_plugins
 from .service import Arbiter
 
 # The bundled web dashboard (plain HTML/CSS/JS, no build step).
@@ -58,12 +59,11 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     def endpoint(fn: Handler, admin: bool = False) -> Endpoint:
         async def handler(req: Request) -> Response:
             lvl = auth.level(_token_from(req))
-            if lvl is None or (admin and lvl != "admin"):
+            if lvl is None:
+                return JSONResponse(ArbiterError("UNAUTHORIZED", "bad token").to_dict(), 401)
+            if admin and lvl != "admin":
                 return JSONResponse(
-                    ArbiterError(
-                        "UNAUTHORIZED", "admin token required" if lvl else "bad token"
-                    ).to_dict(),
-                    status_code=401,
+                    ArbiterError("FORBIDDEN", "admin token required").to_dict(), 403
                 )
             body: dict[str, Any] = {}
             if req.method in ("POST", "PUT", "DELETE"):
@@ -381,7 +381,25 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         }
 
     async def plugins(ctx: Ctx, body: Body) -> Any:
-        return available_plugins()
+        out: dict[str, Any] = dict(available_plugins())
+        out["loaded"] = await asyncio.to_thread(
+            loaded_plugins, arb.cfg.boards, arb.cfg.plugin_paths
+        )
+        return out
+
+    async def config_get(ctx: Ctx, body: Body) -> Any:
+        return arb.config_view()
+
+    async def config_set(ctx: Ctx, body: Body) -> Any:
+        return await arb.update_config(
+            str(body.get("version", "")),
+            body.get("set") or {},
+            by(ctx, body),
+            bool(body.get("dry_run", False)),
+        )
+
+    async def doctor(ctx: Ctx, body: Body) -> Any:
+        return await arb.doctor()
 
     async def shell_commands(ctx: Ctx, body: Body) -> Any:
         return arb.shell_commands(ctx["path"]["board"])
@@ -515,6 +533,9 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/admin/sessions/{sid}/bump", adm(bump), methods=["POST"]),
         Route("/api/admin/approvals/{id}", adm(decide), methods=["POST"]),
         Route("/api/admin/audit", adm(audit), methods=["GET"]),
+        Route("/api/admin/config", adm(config_get), methods=["GET"]),
+        Route("/api/admin/config", adm(config_set), methods=["POST"]),
+        Route("/api/admin/doctor", adm(doctor), methods=["GET"]),
         WebSocketRoute("/api/events", ws_events),
         WebSocketRoute("/api/boards/{board}/console", ws_console),
         Route("/", index, methods=["GET"]),
