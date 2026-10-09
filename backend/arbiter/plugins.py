@@ -158,6 +158,62 @@ def available() -> dict[str, list[str]]:
     }
 
 
+def loaded(boards: list[BoardConfig], extra_paths: list[str] | None = None) -> list[dict[str, Any]]:
+    """Every driver and power plugin arbiter can see, whether it imports, and which boards
+    use it. Built-ins, installed entry points, and `module:Class` names boards refer to."""
+    from . import __version__
+
+    out: list[dict[str, Any]] = []
+
+    def used(kind: str, name: str) -> list[str]:
+        if kind == "driver":
+            return [b.id for b in boards if b.driver == name]
+        return [b.id for b in boards if b.power.kind == name]
+
+    def row(name: str, kind: str, source: str, module: str, version: str | None) -> dict[str, Any]:
+        return {
+            "name": name,
+            "kind": kind,
+            "source": source,
+            "module": module,
+            "version": version,
+            "ok": True,
+            "error": None,
+            "used_by": used(kind, name),
+        }
+
+    for kind, builtins, group in (
+        ("driver", _builtin_drivers(), "arbiter.drivers"),
+        ("power", _builtin_power(), "arbiter.power"),
+    ):
+        for name, factory in sorted(builtins.items()):
+            module = getattr(factory, "__module__", "arbiter.plugins")
+            if module == __name__ and getattr(factory, "__name__", "") == "<lambda>":
+                module = "arbiter.power"
+            out.append(row(name, kind, "builtin", module, __version__))
+        for name, ep in sorted(_entry_points(group).items()):
+            if name in builtins:
+                continue
+            dist = getattr(ep, "dist", None)
+            r = row(
+                name, kind, "entry_point", ep.value.split(":")[0], dist.version if dist else None
+            )
+            try:
+                ep.load()
+            except Exception as e:
+                r["ok"], r["error"] = False, f"{type(e).__name__}: {e}"
+            out.append(r)
+        names = {b.driver for b in boards} if kind == "driver" else {b.power.kind for b in boards}
+        for name in sorted(n for n in names if ":" in n):
+            r = row(name, kind, "path", name.split(":")[0], None)
+            try:
+                _load_dotted(name, extra_paths or [])
+            except Exception as e:
+                r["ok"], r["error"] = False, f"{type(e).__name__}: {e}"
+            out.append(r)
+    return out
+
+
 def make_driver(
     cfg: BoardConfig, hub: ConsoleHub, state_dir: Path, extra_paths: list[str] | None = None
 ) -> BoardDriver:
@@ -416,6 +472,12 @@ class CommandOverlay:
         caps.update({"halt"} if "reset_halt" in commands else set())
         caps.update({"recover"} if "recover" in commands else set())
         self.capabilities = frozenset(caps)
+
+    def update_commands(self, commands: dict[str, Any]) -> None:
+        """New templates for the actions already overridden (Settings page edits)."""
+        for k in self._cmds:
+            if k in commands:
+                self._cmds[k] = commands[k]
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)

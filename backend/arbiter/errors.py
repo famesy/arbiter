@@ -47,10 +47,16 @@ DEFAULT_HINTS = {
     "BAD_REQUEST": "The request was malformed.",
     "BOARD_UNKNOWN": "No board matches. Call list_boards to see what exists.",
     "SESSION_UNKNOWN": "Unknown session. Register again.",
+    "FORBIDDEN": "Only the human (admin token) can do this.",
+    "CONFIG_CHANGED": "config.toml changed since it was read. Read it again and redo the edit.",
+    "CONFIG_INVALID": "The edit was not saved. Fix the listed settings.",
 }
 
 HTTP_STATUS = {
     "UNAUTHORIZED": 401,
+    "FORBIDDEN": 403,
+    "CONFIG_CHANGED": 409,
+    "CONFIG_INVALID": 422,
     "BAD_REQUEST": 400,
     "BOARD_UNKNOWN": 404,
     "LEASE_UNKNOWN": 404,

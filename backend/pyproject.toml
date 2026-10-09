@@ -17,6 +17,7 @@ dependencies = [
   "mcp>=1.10",
   "pyserial>=3.5",
   "psutil>=5.9",
+  "tomlkit>=0.12",  # edits config.toml from the Settings page with comments kept
 ]
 
 [project.optional-dependencies]
