@@ -34,6 +34,7 @@ from .workspace import cache_value
 CONTEXT_LINES = 30  # lines kept from before the crash
 MAX_LINES = 120  # lines kept from the crash block itself
 QUIET_S = 0.75  # a block with no end marker ends after this long without output
+AFTER_END_S = 0.25  # after "Halting system", how long coredump lines may still follow
 REPEAT_WINDOW_S = 120.0  # the same crash again within this window counts as a repeat
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -117,6 +118,7 @@ class Crash:
     context: list[str] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)
     coredump: list[str] = field(default_factory=list)
+    coredump_report: dict[str, Any] | None = None
     image: dict[str, Any] | None = None
     symbols: dict[str, Any] = field(default_factory=dict)
     symbolized_with: str | None = None
@@ -139,6 +141,9 @@ class Crash:
         """Best single source location: the assert, else the faulting pc."""
         if self.assertion:
             return f"{self.assertion['file']}:{self.assertion['line']}"
+        for frame in (self.coredump_report or {}).get("backtrace", [])[:1]:
+            if frame.get("file"):
+                return f"{frame['function']}() at {frame['file']}:{frame['line']}"
         pc = self.symbols.get("pc")
         if pc:
             return str(pc["text"])
@@ -173,6 +178,7 @@ class Crash:
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        d["coredump"] = len(self.coredump)  # the raw #CD: lines are in the coredump files
         d["summary"] = self.summary()
         d["where"] = self.where()
         return d
@@ -293,23 +299,27 @@ class CrashWatcher:
         if tail:
             self._partial[channel] = (pos, tail)
         if channel in self._open:
-            self._arm(channel)
+            self._arm(channel, AFTER_END_S if self._open[channel].ended_by else None)
 
     def _line(self, channel: str, raw: str, cursor: int) -> None:
         line = clean(raw)
         crash = self._open.get(channel)
         if crash is not None:
-            if _BOOT.search(line):
-                self._close(channel, "reboot")
-            elif _COREDUMP.search(line):
-                crash.coredump.append(line[line.find("#CD:") :])
+            if _COREDUMP.search(line):
+                crash.coredump.append(line[line.find("#CD:") :].strip())
+                if crash.ended_by and "#CD:END#" in line:
+                    self._close(channel, crash.ended_by)
                 return
+            if _BOOT.search(line) or crash.ended_by:
+                # The block ended; this line belongs to whatever comes next.
+                self._close(channel, crash.ended_by or "reboot")
             else:
                 if len(crash.lines) < MAX_LINES:
                     crash.lines.append(raw.rstrip("\r"))
                 if m := _END.search(line):
-                    word = m.group(0)
-                    self._close(channel, "halted" if "alt" in word else "reset")
+                    # Coredump lines may still follow "Halting system": wait a moment for them.
+                    crash.ended_by = "halted" if "alt" in m.group(0) else "reset"
+                    self._arm(channel, AFTER_END_S)
                 elif len(crash.lines) >= MAX_LINES and not crash.coredump:
                     self._close(channel, "truncated")
                 return
@@ -330,7 +340,7 @@ class CrashWatcher:
         if line.strip():
             recent.append(raw.rstrip("\r"))
 
-    def _arm(self, channel: str) -> None:
+    def _arm(self, channel: str, delay: float | None = None) -> None:
         t = self._timers.pop(channel, None)
         if t is not None:
             t.cancel()
@@ -338,7 +348,9 @@ class CrashWatcher:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._timers[channel] = loop.call_later(self.quiet_s, self._close, channel, "quiet")
+        self._timers[channel] = loop.call_later(
+            self.quiet_s if delay is None else delay, self._close, channel, "quiet"
+        )
 
     def _close(self, channel: str, why: str) -> None:
         t = self._timers.pop(channel, None)
@@ -350,7 +362,7 @@ class CrashWatcher:
         _pos, rest = self._partial.pop(channel, (0, b""))
         if rest.strip() and why == "quiet" and len(crash.lines) < MAX_LINES:
             crash.lines.append(rest.decode(errors="replace").rstrip("\r"))
-        crash.ended_by = why
+        crash.ended_by = crash.ended_by or why
         crash.last_at = crash.at
         self.on_crash(parse_crash(crash))
 
