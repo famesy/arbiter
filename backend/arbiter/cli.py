@@ -178,6 +178,31 @@ def cmd_flash(args: argparse.Namespace) -> int:
     return 0 if res.get("status") == "done" else 1
 
 
+def cmd_measure(args: argparse.Namespace) -> int:
+    c = Client()
+    if args.list:
+        _print(c.get("/api/power/baselines", board=args.board or ""), True)
+        return 0
+    res = c.post(
+        "/api/power/measure",
+        {
+            "lease_token": _lease(c, args),
+            "duration_ms": args.duration,
+            "trigger": args.trigger,
+            "power_cycle": args.power_cycle,
+            "save_baseline": args.save,
+            "baseline": args.baseline,
+            "tolerance_pct": args.tolerance,
+            "max_avg_ua": args.max_avg,
+            "max_peak_ua": args.max_peak,
+            "max_charge_uc": args.max_charge,
+        },
+    )
+    res = _wait_op(c, res)
+    _print(res, True)
+    return 0 if res.get("status") == "done" and res.get("passed", True) else 1
+
+
 def cmd_dfu(args: argparse.Namespace) -> int:
     c = Client()
     if args.status:
@@ -828,6 +853,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("build_dir")
     sp.add_argument("--domain")
     sp.add_argument("--erase", action="store_true")
+    sp.add_argument("--lease")
+    sp = add("measure", cmd_measure, "measure current; check limits or a saved baseline")
+    sp.add_argument("--duration", type=int, default=5000, help="ms")
+    sp.add_argument("--trigger", help='"after_boot" or a console regex to wait for first')
+    sp.add_argument("--power-cycle", action="store_true")
+    sp.add_argument("--save", metavar="NAME", help="save as a baseline")
+    sp.add_argument("--baseline", metavar="NAME", help="compare with a saved baseline")
+    sp.add_argument("--tolerance", type=float, default=10.0, help="allowed rise in %% (default 10)")
+    sp.add_argument("--max-avg", type=float, help="limit on the average, µA")
+    sp.add_argument("--max-peak", type=float, help="limit on the peak, µA")
+    sp.add_argument("--max-charge", type=float, help="limit on the charge, µC")
+    sp.add_argument("--list", action="store_true", help="list saved baselines")
+    sp.add_argument("--board", help="with --list: one board")
     sp.add_argument("--lease")
     sp = add("dfu", cmd_dfu, "update your board over MCUmgr (upload, test, reset, confirm)")
     sp.add_argument("build_dir", nargs="?")

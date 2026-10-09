@@ -595,10 +595,19 @@ async def measure_current(
     trigger: str | None = None,
     threshold_ua: float | None = None,
     power_cycle: bool = False,
+    save_baseline: str | None = None,
+    baseline: str | None = None,
+    tolerance_pct: float = 10.0,
+    max_avg_ua: float | None = None,
+    max_peak_ua: float | None = None,
+    max_charge_uc: float | None = None,
     lease_token: str | None = None,
 ) -> dict[str, Any]:
     """Measure current. Returns avg/min/max/peak µA, charge µC and a trace file path, never raw samples.
-    trigger: "after_boot" or a console regex to wait for first. RTT is detached automatically."""
+    trigger: "after_boot" or a console regex to wait for first. RTT is detached automatically.
+    As a test: max_avg_ua / max_peak_ua / max_charge_uc are limits; baseline="idle" compares with a saved
+    baseline (fails when average or charge rise more than tolerance_pct); save_baseline="idle" saves
+    this measurement as one. Then "passed" says whether every check held."""
     return await shim.call(
         "/api/power/measure",
         {
@@ -607,9 +616,21 @@ async def measure_current(
             "trigger": trigger,
             "threshold_ua": threshold_ua,
             "power_cycle": power_cycle,
+            "save_baseline": save_baseline,
+            "baseline": baseline,
+            "tolerance_pct": tolerance_pct,
+            "max_avg_ua": max_avg_ua,
+            "max_peak_ua": max_peak_ua,
+            "max_charge_uc": max_charge_uc,
         },
         need_lease=True,
     )
+
+
+@mcp.tool()
+async def current_baselines(board: str | None = None) -> dict[str, Any]:
+    """Saved current baselines per board: average/peak/charge, how they were measured and when."""
+    return await shim.get("/api/power/baselines", board=board or "")
 
 
 @mcp.tool()
