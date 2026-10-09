@@ -95,7 +95,12 @@ colours off. The footer lists the keys that apply right now:
 | F9 | answer agents' requests |
 | PgUp/PgDn, Ctrl+L, Ctrl+Q | scroll, clear, quit |
 
-Click a folded "Booted ..." line to open it. Settings stay in the web dashboard.
+Everything works with the mouse too: click a board name or "queue N" in the status line,
+click a key in the footer (take over, give back, pause...), click a shell suggestion,
+use the buttons in the queue and requests popups, click a folded "Booted ..." line to open
+it, scroll with the wheel, and drag over the console to select text (Ctrl+C copies it;
+in Windows Terminal Shift+drag still gives the terminal's own selection). Settings stay
+in the web dashboard.
 
 ## Connect an agent
 

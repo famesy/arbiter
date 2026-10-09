@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 import websockets
 from rich.console import RenderableType
+from rich.segment import Segment
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
@@ -27,8 +28,9 @@ from textual.containers import Horizontal, Vertical
 from textual.geometry import Size
 from textual.screen import ModalScreen
 from textual.scroll_view import ScrollView
+from textual.selection import Selection
 from textual.strip import Strip
-from textual.widgets import DataTable, Footer, Input, OptionList, Static
+from textual.widgets import Button, Checkbox, DataTable, Footer, Input, OptionList, Static
 from textual.widgets.option_list import Option
 
 from ..client import AsyncClient
@@ -189,7 +191,26 @@ class ConsoleView(ScrollView, can_focus=False):
         width = self.scrollable_content_region.width
         if row >= len(self._rows):
             return Strip.blank(width, self.rich_style)
-        return self._rows[row].crop_extend(0, width, None).apply_style(self.rich_style)
+        strip = self._rows[row]
+        selection = self.text_selection
+        span = selection.get_span(row) if selection is not None else None
+        if span is not None:
+            # Drag to select (Textual's own selection), Ctrl+C copies it.
+            start, end = span
+            end = strip.cell_length if end == -1 else end
+            sel = self.screen.get_component_rich_style("screen--selection")
+            picked = [Segment(t, (st or Style()) + sel, c) for t, st, c in strip.crop(start, end)]
+            strip = Strip.join(
+                [strip.crop(0, start), Strip(picked), strip.crop(end, strip.cell_length)]
+            )
+        strip = strip.crop_extend(0, width, None).apply_style(self.rich_style)
+        return strip.apply_offsets(0, row)
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        return selection.extract("\n".join(r.text for r in self._rows)), "\n"
+
+    def selection_updated(self, selection: Selection | None) -> None:
+        self.refresh()
 
     def on_resize(self, event: events.Resize) -> None:
         self.update_rows()
@@ -233,8 +254,20 @@ class Popup(ModalScreen[None]):
     Popup .title { text-style: bold; margin-bottom: 1; }
     Popup .keys { color: $text-muted; margin-top: 1; }
     Popup DataTable { height: auto; max-height: 16; }
+    Popup .buttons { height: auto; margin-top: 1; }
+    Popup Button { margin-right: 1; min-width: 8; }
+    Popup Checkbox { border: none; padding: 0; background: $surface; }
     """
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape,q", "dismiss", "Close")]
+
+    def on_click(self, event: events.Click) -> None:
+        if event.widget is self:  # a click outside the box closes it
+            self.dismiss()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        # Each button names the action its key runs: id="move--1" runs move(1).
+        name, _, arg = (event.button.id or "").partition("--")
+        await self.run_action(f"{name}({arg.replace('_', '-')})" if arg else name)
 
     @property
     def tui(self) -> ArbiterTui:
@@ -260,7 +293,16 @@ class QueuePopup(Popup):
             yield Static("", classes="title")
             yield DataTable(cursor_type="row", zebra_stripes=False)
             yield Static("", classes="empty")
-            yield Static("↑↓ select · u/d move · p priority · x cancel · Esc close", classes="keys")
+            with Horizontal(classes="buttons"):
+                yield Button("▲ Up", id="move--_1", compact=True)
+                yield Button("▼ Down", id="move--1", compact=True)
+                yield Button("Priority", id="priority", compact=True)
+                yield Button("Cancel ticket", id="cancel", variant="error", compact=True)
+                yield Button("Close", id="dismiss", compact=True)
+            yield Static(
+                "Click a row, then a button · keys: u/d move, p priority, x cancel, Esc close",
+                classes="keys",
+            )
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
@@ -355,20 +397,27 @@ class ViewPopup(Popup):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Console view", classes="title")
-            yield Static("", id="opts")
-            yield Static("Press 1, 2 or 3 to switch · Esc close", classes="keys")
+            for n, (k, label, _) in enumerate(VIEW_OPTS, 1):
+                box = Checkbox(f"{n}  {label}", self.tui.view[k], id=f"view-{k}", compact=True)
+                box.can_focus = False  # mouse or the 1/2/3 keys; no focus ring
+                yield box
+            with Horizontal(classes="buttons"):
+                yield Button("Close", id="dismiss", compact=True)
+            yield Static("Click an option or press 1, 2 or 3 · Esc close", classes="keys")
 
     def on_mount(self) -> None:
         self.refresh_data()
 
     def refresh_data(self) -> None:
-        view = self.tui.view
-        t = Text()
-        for n, (k, label, _) in enumerate(VIEW_OPTS, 1):
-            t.append(f" {n} ", Style(bold=True))
-            t.append("[x] " if view[k] else "[ ] ", Style(color="green" if view[k] else None))
-            t.append(label + ("\n" if n < len(VIEW_OPTS) else ""))
-        self.query_one("#opts", Static).update(t)
+        for k, _, _ in VIEW_OPTS:
+            box = self.query_one(f"#view-{k}", Checkbox)
+            with box.prevent(Checkbox.Changed):
+                box.value = self.tui.view[k]
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        key = (event.checkbox.id or "").removeprefix("view-")
+        if key in self.tui.view:
+            self.tui.set_view(key, event.value)
 
     def action_flip(self, key: str) -> None:
         self.tui.set_view(key, not self.tui.view[key])
@@ -386,7 +435,13 @@ class RequestsPopup(Popup):
         with Vertical():
             yield Static("Requests from agents", classes="title")
             yield DataTable(cursor_type="row")
-            yield Static("↑↓ select · a approve · d deny · Esc close", classes="keys")
+            with Horizontal(classes="buttons"):
+                yield Button("Approve", id="decide--True", variant="success", compact=True)
+                yield Button("Deny", id="decide--False", variant="error", compact=True)
+                yield Button("Close", id="dismiss", compact=True)
+            yield Static(
+                "Click a row, then a button · keys: a approve, d deny, Esc close", classes="keys"
+            )
 
     def on_mount(self) -> None:
         self.query_one(DataTable).add_columns("Agent", "Wants to", "Board")
@@ -462,6 +517,7 @@ class ArbiterTui(App[int]):
         Binding("f8", "reset", "Reset", priority=True),
         Binding("f9", "requests", "Requests", priority=True),
         Binding("ctrl+l", "clear", "Clear", show=False, priority=True),
+        Binding("ctrl+c", "copy", "Copy", show=False, priority=True),
         Binding("pageup", "page(-1)", show=False, priority=True),
         Binding("pagedown", "page(1)", show=False, priority=True),
         Binding("ctrl+end", "bottom", show=False, priority=True),
@@ -703,6 +759,11 @@ class ArbiterTui(App[int]):
             self.shell = ShellTree(data)
             self.update_suggest()
 
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # A click on a suggestion completes it.
+        self.accept(event.option_index)
+        self.input.focus()
+
     def on_input_changed(self, event: Input.Changed) -> None:
         self.forced = False
         self.update_suggest()
@@ -821,7 +882,8 @@ class ArbiterTui(App[int]):
         if len(boards) > 1:  # the board switcher only shows when there is a choice
             for x in boards:
                 on = x["id"] == self.selected
-                left.append(f" {x['id']} ", Style(bold=True, reverse=True) if on else DIM)
+                click = Style.from_meta({"@click": f"app.select_board({x['id']!r})"})
+                left.append(f" {x['id']} ", (Style(bold=True, reverse=True) if on else DIM) + click)
             left.append(" ")
         elif b:
             left.append(b["id"] + "  ", Style(bold=True))
@@ -844,7 +906,8 @@ class ArbiterTui(App[int]):
                     left.append(f" · {left_s}", DIM)
             q = queue_for(self.state, b)
             left.append("  │  ", DIM)
-            left.append(f"queue {len(q)}", Style(color="yellow") if q else DIM)
+            click = Style.from_meta({"@click": "app.queue"})
+            left.append(f"queue {len(q)}", (Style(color="yellow") if q else DIM) + click)
             p = b.get("power")
             if p:
                 left.append("  │  ", DIM)
@@ -861,7 +924,8 @@ class ArbiterTui(App[int]):
             if n:
                 left.append("  │  ", DIM)
                 left.append(
-                    f"{n} request{'' if n == 1 else 's'} (F9)", Style(color="yellow", bold=True)
+                    f"{n} request{'' if n == 1 else 's'} (F9)",
+                    Style(color="yellow", bold=True) + Style.from_meta({"@click": "app.requests"}),
                 )
         right = (
             Text("● live", Style(color="green"))
@@ -949,6 +1013,22 @@ class ArbiterTui(App[int]):
     def action_requests(self) -> None:
         if self.state.get("approvals"):
             self.push_screen(RequestsPopup())
+
+    def action_copy(self) -> None:
+        """Ctrl+C copies text selected with the mouse (the console or the input line)."""
+        text = self.screen.get_selected_text()
+        if text:
+            self.copy_to_clipboard(text)
+            self.screen.clear_selection()
+            self.notify("Copied", timeout=1.5)
+        else:
+            self.input.action_copy()
+
+    def action_select_board(self, board: str) -> None:
+        if board != self.selected and any(b["id"] == board for b in self.state["boards"]):
+            self.selected = board
+            self.channel = "all"
+            self.set_state(self.state)
 
     def action_clear(self) -> None:
         self.console_view.model.clear()

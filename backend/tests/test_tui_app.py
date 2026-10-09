@@ -16,8 +16,9 @@ from .conftest import make_config, sim_board
 
 pytest.importorskip("textual")
 
-from arbiter.tui.app import ArbiterTui
+from arbiter.tui.app import ArbiterTui, QueuePopup
 from arbiter.tui.model import BootBlock
+from textual.widgets._footer import FooterKey
 
 
 def free_port() -> int:
@@ -111,3 +112,38 @@ async def test_shell_suggestions_and_view(daemon, build_dir):
         assert app.view["ts"] is True
         await pilot.press("escape")
         assert not app.screen.is_modal
+
+
+async def test_mouse(daemon, build_dir):
+    await daemon._read_shell(daemon.boards["sim-1"], build_dir)
+    app = ArbiterTui()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await until(pilot, lambda: app.shell.available and "started on" in console_text(app))
+
+        # A click on a suggestion completes it.
+        await pilot.press("k")
+        await pilot.click("#suggest", offset=(2, 0))
+        assert app.input.value == "kernel "
+
+        # Drag across the console selects text; Ctrl+C copies it.
+        await pilot.mouse_down("#console", offset=(0, 0))
+        await pilot.hover("#console", offset=(30, 2))
+        await pilot.mouse_up("#console", offset=(30, 2))
+        assert app.screen.get_selected_text()
+        await pilot.press("ctrl+c")
+        assert app.clipboard
+
+        # The board names in the status line switch boards.
+        await pilot.click("#status", offset=(10, 0))
+        await until(pilot, lambda: app.selected == "sim-2")
+
+        # The queue opens from the status line; its buttons and a click outside work.
+        await pilot.click("#status", offset=(29, 0))  # "queue 0"
+        await until(pilot, lambda: isinstance(app.screen, QueuePopup))
+        await pilot.click("#dismiss")
+        await until(pilot, lambda: not app.screen.is_modal)
+
+        # The footer keys are buttons too: F5 takes the board.
+        f5 = next(k for k in app.query(FooterKey) if k.key == "f5")
+        await pilot.click(f5)
+        await until(pilot, lambda: app.board is not None and app.board["state"] == "HUMAN")
