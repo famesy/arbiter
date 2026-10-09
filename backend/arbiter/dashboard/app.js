@@ -441,7 +441,7 @@ function renderDetail() {
       left ? h("span", { class: "muted" }, ` · lease ${left}`) : "",
       b.lease.paused_by ? h("span", { class: "muted" }, ` · paused by ${who(b.lease.paused_by)}${b.lease.pause_reason ? `: ${b.lease.pause_reason}` : ""}`) : "",
       b.op && b.op.running ? h("span", { class: "muted" }, ` · ${b.op.kind} running for ${dur(b.op.elapsed_s)}`) : "") : null);
-  shell.load(b.id, `${b.shell_commands}|${(lastOp(b.id, "flash") || {}).id}`);
+  shell.load(b.id, `${b.shell_commands}|${b.shell_reason}|${(lastOp(b.id, "flash") || {}).id}`);
   renderIf(D.controls, `${b.id}|${b.state}|${b.lease && b.lease.state}|${!!b.op}`, () => controls(b));
   renderTabs(b);
   renderTermHint(b);
@@ -544,8 +544,11 @@ function renderTermHint(b) {
   D.send.disabled = D.input.disabled;
   D.input.placeholder = agentHolds ? `Type alongside ${who(b.lease.holder)}, Enter to send` : "Type a command, Enter to send";
   const where = term.channel === "all" ? "the primary console" : term.channel;
-  const tips = shell.board === b.id && shell.data && shell.data.available
-    ? ` Tab suggests the ${shell.data.count} shell commands in the flashed image; ↑ recalls earlier lines.` : "";
+  // Say why there are no command hints instead of leaving them silently missing.
+  const sd = shell.board === b.id ? shell.data : null;
+  const tips = !sd ? ""
+    : sd.available ? ` Tab suggests the ${sd.count} shell commands in the flashed image; ↑ recalls earlier lines.`
+    : ` No command hints: ${sd.reason || "none found in the flashed image"}.`;
   fill(D.hint, agentHolds
     ? `${who(b.lease.holder)} holds this board. Lines you send go to ${where}, marked as yours; the agent keeps the board.${tips}`
     : `Commands go to ${where}.${tips}`);
@@ -1045,7 +1048,7 @@ function describe(ev) {
     case "lease.op": return [`${sess(lease ? lease.session_id : "")} ${typeof d.op === "string" ? d.op : JSON.stringify(d.op)} on ${d.board}`];
     case "board.state": return [`${d.board} is now ${(STATUS[d.state] || d.state).toLowerCase()}${d.held_by ? ` by ${who(d.held_by)}` : ""}${d.note ? `: ${d.note}` : ""}`,
       ["OFFLINE", "NEEDS_RECOVER"].includes(d.state) ? "err" : ""];
-    case "board.shell": return [`${d.board} shell: ${d.available ? `${d.count} commands from the flashed image` : "no commands found"}`];
+    case "board.shell": return [`${d.board} shell: ${d.available ? `${d.count} commands from the flashed image` : `no commands (${d.reason || "none found"})`}`];
     case "board.console": return [`${d.board} console detected: ${d.console && d.console.resolved}${d.console && d.console.method ? ` (${d.console.method})` : ""}`];
     case "op.started": return [`${sess(d.op.session)} started ${d.op.kind} on ${d.op.board}`];
     case "op.finished": {
@@ -1198,7 +1201,7 @@ function renderSettings() {
   if (!state) return;
   const root = $("#settings");
   const cfg = daemonCfg.config && !daemonCfg.config.error ? daemonCfg.config : null;
-  const key = JSON.stringify([state.boards.map((b) => [b.id, b.health, b.console, b.power && b.power.limits, b.console_channels && b.console_channels.primary, b.shell_commands, b.driver]),
+  const key = JSON.stringify([state.boards.map((b) => [b.id, b.health, b.console, b.power && b.power.limits, b.console_channels && b.console_channels.primary, b.shell_commands, b.shell_reason, b.driver]),
     daemonCfg, prefs, view, edit.scope, edit.rev, edit.busy, edit.conflict]);
   renderIf(root, key, () => h("div", { class: "settings" },
     h("nav", { class: "settings-nav" }, SECTIONS.map(([id, label]) =>
@@ -1292,7 +1295,7 @@ function boardSettings(b, c) {
         field("Mode", (b.console && b.console.mode) || undefined, "auto picks RTT only when the build has CONFIG_RTT_CONSOLE=y and no UART console."),
         field("Primary channel", b.console_channels ? b.console_channels.primary : undefined),
         field("Channels", (b.console && b.console.sources) || []),
-        field("Shell commands", b.shell_commands === null || b.shell_commands === undefined ? "none found in the flashed image" : `${b.shell_commands} in the flashed image`)),
+        field("Shell commands", b.shell_commands === null || b.shell_commands === undefined ? `none: ${b.shell_reason || "none found in the flashed image"}` : `${b.shell_commands} in the flashed image`)),
       group("Power",
         field("Supply", pw ? pw.kind : "none"),
         pw ? field("Voltage range", `${mv(lim.mv_min)} to ${mv(lim.mv_max)}`, "Refused outside this range, for agents and you alike.") : null,
