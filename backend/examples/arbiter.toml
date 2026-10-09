@@ -50,6 +50,11 @@ role = "aux"                     # VCOM1: TF-M secure output, read only (uart:tf
 name = "tfm"
 vcom = 1
 
+# Other port roles:
+#   role = "aux", name = "tracing"   Zephyr CTF tracing UART (the tracing tool reads uart:tracing)
+#   role = "smp"                     a dedicated MCUmgr UART for dfu (else dfu borrows the app UART)
+#   role = "trace"                   the nRF91 modem trace UART (else modem_trace uses VCOM1)
+
 # Optional: a Nordic PPK2 as the board's supply and current meter.
 # Power limits are per board and apply to every supply kind:
 #   mv_min, mv_max  any voltage outside this range is refused, for agents and you alike

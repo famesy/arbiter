@@ -321,6 +321,15 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
     async def inspect_hung(ctx: Ctx, body: Body) -> Any:
         return await arb.inspect_hung(sid(ctx), body["lease_token"], body.get("build_dir"))
 
+    async def tracing(ctx: Ctx, body: Body) -> Any:
+        return await arb.tracing(
+            sid(ctx),
+            body["lease_token"],
+            body.get("action", "status"),
+            body.get("channel"),
+            body.get("build_dir"),
+        )
+
     async def thread_health(ctx: Ctx, body: Body) -> Any:
         return await arb.thread_health(
             sid(ctx),
@@ -643,6 +652,7 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/console/shell", a(console_shell), methods=["POST"]),
         Route("/api/gdb/start", a(gdb_start), methods=["POST"]),
         Route("/api/threads", a(thread_health), methods=["POST"]),
+        Route("/api/tracing", a(tracing), methods=["POST"]),
         Route("/api/power/baselines", a(power_baselines), methods=["GET"]),
         Route("/api/dfu", a(dfu), methods=["POST"]),
         Route("/api/dfu/status", a(dfu_status), methods=["POST"]),
