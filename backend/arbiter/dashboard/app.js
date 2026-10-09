@@ -79,6 +79,7 @@ class ApiError extends Error {
     super((body && body.message) || `HTTP ${status}`);
     this.status = status;
     this.code = body && body.error;
+    this.body = body;
   }
 }
 
@@ -1048,6 +1049,11 @@ function describe(ev) {
       const who_ = d.sender && d.sender.kind === "human" ? (d.sender.name || "You") : (d.sender && (d.sender.name || d.sender.tag)) || "an agent";
       return [`${who_} sent “${String(d.data || "").trim()}” to ${d.board}${d.channel ? ` (${d.channel})` : ""}`];
     }
+    case "config.changed": {
+      const n = (d.paths || []).length;
+      const r = (d.restart_needed || []).length;
+      return [`${who(d.by) || "Someone"} changed ${plural(n, "setting")}${r ? `, ${r} after a restart` : ""}`, r ? "warn" : ""];
+    }
     case "notify": return [String(d.text).replace(/^(agent|human):/, ""), "warn"];
     default: return [`${d.kind} ${d.board || ""}`];
   }
@@ -1058,6 +1064,7 @@ function boardOf(ev) {
 }
 
 function addEvent(ev) {
+  if (ev.kind === "config.changed" && page === "settings" && !edit.scope && ev.seq > lastSeqAtLoad) loadSettings();
   if (HIDE.has(ev.kind)) return;
   let text, level;
   try { [text, level] = describe(ev); } catch (e) { text = ev.kind; level = ""; }
@@ -1153,7 +1160,9 @@ function showPage() {
 // What the daemon told us; `null` while loading, `false` when this daemon has no such route.
 const daemonCfg = { config: null, doctor: null, plugins: null, doctorBusy: false };
 
+let lastSeqAtLoad = 0;
 async function loadSettings() {
+  lastSeqAtLoad = lastSeq;
   const get = async (path) => {
     try { return await api("GET", path); } catch (e) { return e.status === 404 || e.status === 405 ? false : { error: e.message }; }
   };
@@ -1171,31 +1180,51 @@ async function runDoctor() {
   renderSettings();
 }
 
-const SECTIONS = [["boards", "Boards"], ["health", "Health check"], ["plugins", "Plugins"], ["agents", "Agents and leases"], ["prefs", "This browser"]];
+const SECTIONS = [["boards", "Boards"], ["health", "Health check"], ["plugins", "Plugins"], ["agents", "Agents and leases"], ["daemon", "Daemon"], ["prefs", "This browser"]];
 
 function renderSettings() {
   if (!state) return;
   const root = $("#settings");
   const cfg = daemonCfg.config && !daemonCfg.config.error ? daemonCfg.config : null;
   const key = JSON.stringify([state.boards.map((b) => [b.id, b.health, b.console, b.power && b.power.limits, b.console_channels && b.console_channels.primary, b.shell_commands, b.driver]),
-    daemonCfg, prefs, view]);
+    daemonCfg, prefs, view, edit.scope, edit.rev, edit.busy, edit.conflict]);
   renderIf(root, key, () => h("div", { class: "settings" },
     h("nav", { class: "settings-nav" }, SECTIONS.map(([id, label]) =>
       h("a", { href: `#settings`, onclick: (ev) => { ev.preventDefault(); const el = document.getElementById(`set-${id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); } }, label))),
     h("div", { class: "settings-body" },
       editNote(cfg),
-      section("boards", "Boards", "Each board's hardware, console and power, as arbiterd loaded them.",
-        state.boards.length ? state.boards.map((b) => boardSettings(b, cfg && (cfg.boards || []).find((c) => c.id === b.id))) : h("div", { class: "empty" }, "No boards configured.")),
+      section("boards", "Boards", "Each board's hardware, console and power.",
+        cfg ? h("div", { class: "section-actions" }, editButton("new", "Add board")) : null,
+        edit.scope === "new" ? h("div", { class: "board-set editing" }, h("div", { class: "board-set-head" }, h("h3", {}, "New board")), editForm([[null, NEW_BOARD_FORM()]])) : null,
+        boardList(cfg)),
       section("health", "Health check", "The same checks as arbiter doctor. They read the setup and never touch a board.", doctorPanel()),
       section("plugins", "Plugins", "Board drivers and power supplies arbiterd can load. A plugin is in use when a board names it.", pluginsPanel()),
       section("agents", "Agents and leases", "How long agents may hold a board and how they wait in the queue.", agentsPanel(cfg)),
+      cfg ? section("daemon", "Daemon", "Where arbiterd listens and where it finds the tools.", daemonPanel(cfg)) : null,
       section("prefs", "This browser", "Saved in this browser only. They change how the dashboard looks, not the daemon.", prefsPanel()))));
+  updateForm();
+}
+
+// Boards the daemon runs, plus boards saved in the config that wait for a restart.
+function boardList(cfg) {
+  const running = state.boards.map((b) => boardSettings(b, cfg && (cfg.boards || []).find((c) => c.id === b.id)));
+  const pending = cfg ? (cfg.boards || []).filter((c) => !state.boards.some((b) => b.id === c.id)).map((c) => boardSettings(null, c)) : [];
+  const all = [...running, ...pending];
+  return all.length ? all : h("div", { class: "empty" }, "No boards configured.");
 }
 
 function editNote(cfg) {
-  const where = cfg && cfg.path ? h("code", {}, cfg.path) : "config.toml in the arbiter state folder";
-  return h("div", { class: "alert note" }, h("span", { class: "text" },
-    "Board and daemon settings are read-only here for now. To change them, edit ", where, " and restart arbiterd. Settings under This browser can be changed below."));
+  if (!cfg) {
+    return h("div", { class: "alert note" }, h("span", { class: "text" },
+      "This arbiterd can't edit its settings from here. Edit config.toml in the arbiter state folder and restart arbiterd, or update arbiter. Settings under This browser can be changed below."));
+  }
+  const waiting = cfg.restart_needed || [];
+  return [
+    h("div", { class: "alert note" }, h("span", { class: "text" },
+      "Saved to ", h("code", {}, cfg.path), ". Changes marked “applies now” take effect at once; the others after arbiterd restarts.")),
+    waiting.length ? h("div", { class: "alert warn" }, h("span", { class: "text" },
+      `Restart arbiterd to apply ${plural(waiting.length, "saved change")}: ${waiting.slice(0, 6).join(", ")}${waiting.length > 6 ? ", …" : ""}.`)) : null,
+  ];
 }
 
 function section(id, title, sub, ...body) {
@@ -1218,6 +1247,17 @@ function group(title, ...fields) {
 }
 
 function boardSettings(b, c) {
+  const id = b ? b.id : c.id;
+  const head = (...extra) => h("div", { class: "board-set-head" }, h("h3", {}, id), ...extra, h("span", { class: "spacer" }),
+    edit.scope === `board:${id}` ? null : editButton(`board:${id}`));
+  if (edit.scope === `board:${id}`) {
+    return h("div", { class: "board-set editing" }, head(),
+      editForm(boardForm(id), h("button", { class: "danger", onclick: () => removeBoard(id) }, "Remove board")));
+  }
+  if (!b) {
+    return h("div", { class: "board-set" }, head(h("span", { class: "pill warn" }, h("span", { class: "dot" }), "starts after a restart")),
+      h("div", { class: "groups" }, group("Hardware", field("Platform", c.platform), field("Driver", c.driver), field("Probe serial", c.probe_serial))));
+  }
   const pw = b.power;
   const lim = (pw && pw.limits) || {};
   const pc = c && c.power;
@@ -1227,7 +1267,7 @@ function boardSettings(b, c) {
   const cmds = c ? Object.entries(c.commands || {}).map(([k, v]) => h("div", { class: "cmd" }, h("span", { class: "n" }, k), h("code", {}, typeof v === "string" ? v : JSON.stringify(v)))) : null;
   const health = b.health === "missing" || b.health === "error" ? h("span", { class: `pill ${b.health === "error" ? "err" : "warn"}` }, h("span", { class: "dot" }), b.health_note || b.health) : null;
   return h("div", { class: "board-set" },
-    h("div", { class: "board-set-head" }, h("h3", {}, b.id), statusPill(b), health),
+    head(statusPill(b), health),
     h("div", { class: "groups" },
       group("Hardware",
         field("Platform", b.platform),
@@ -1298,6 +1338,7 @@ function pluginsPanel() {
 }
 
 function agentsPanel(cfg) {
+  if (edit.scope === "timing") return editForm([[null, TIMING_FORM]]);
   const t = cfg ? cfg.timing || {} : null;
   const s = (k) => (t ? (t[k] === undefined ? undefined : dur(t[k])) : undefined);
   return h("div", { class: "fields" },
@@ -1307,7 +1348,335 @@ function agentsPanel(cfg) {
     field("Grace before losing a lease", s("grace_s")),
     field("Claim a granted board within", s("claim_timeout_s")),
     field("Queue ticket expires after", s("ticket_ttl_s")),
-    field("Your name in logs", cfg && cfg.daemon ? cfg.daemon.human_name : state.daemon && state.daemon.human));
+    field("Your name in logs", cfg && cfg.daemon ? cfg.daemon.human_name : state.daemon && state.daemon.human),
+    cfg ? h("div", {}, editButton("timing")) : null);
+}
+
+function daemonPanel(cfg) {
+  if (edit.scope === "daemon") return editForm([[null, DAEMON_FORM]]);
+  const d = cfg.daemon || {};
+  return h("div", { class: "fields" },
+    field("Your name", d.human_name),
+    field("Listen address", d.host && d.port ? `${d.host}:${d.port}` : d.host),
+    field("NCS toolchain environment.json", d.toolchain_env),
+    field("Zephyr base", d.zephyr_base),
+    field("Plugin folders", d.plugin_paths || []),
+    h("div", {}, editButton("daemon")));
+}
+
+// ------------------------------------------------------------------ settings: editing
+// One form is open at a time (a board, a new board, lease timing or the daemon). Edits are
+// checked with a dry run as you type and saved with POST /api/admin/config, which takes
+// dotted paths ("boards.nrf9161dk-1.power.mv_max") and the config version it was read at.
+const edit = { scope: null, values: {}, errors: [], busy: false, conflict: false, rev: 0, timer: null, check: 0 };
+
+function cfgNow() {
+  return daemonCfg.config && !daemonCfg.config.error ? daemonCfg.config : null;
+}
+
+// Read a dotted path; "boards.<id>" picks the board by id.
+function getPath(obj, path) {
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length && cur !== undefined && cur !== null; i++) {
+    if (Array.isArray(cur) && parts[i - 1] === "boards") cur = cur.find((b) => b.id === parts[i]);
+    else cur = cur[parts[i]];
+  }
+  return cur;
+}
+
+function isLive(path) {
+  const cfg = cfgNow();
+  return !!cfg && (cfg.live || []).some((p) => new RegExp(`^${p.replace(/\./g, "\\.").replace(/\*/g, "[^.]+")}$`).test(path));
+}
+
+// Field descriptors. type: text | number | bool | select | list | ports | map.
+function boardForm(id) {
+  const p = (k) => `boards.${id}.${k}`;
+  const plug = daemonCfg.plugins && !daemonCfg.plugins.error ? daemonCfg.plugins : { drivers: [], power: [] };
+  const drivers = plug.drivers || [];
+  const supplies = ["none", ...(plug.power || []).filter((k) => k !== "none")];
+  return [
+    ["Hardware", [
+      { path: p("platform"), label: "Platform", type: "text", hint: "The Zephyr board target, for example nrf9161dk/nrf9161/ns." },
+      { path: p("driver"), label: "Driver", type: "select", options: drivers },
+      { path: p("tags"), label: "Tags", type: "list", hint: "Comma separated. Agents can ask for a board by tag." },
+      { path: p("probe_serial"), label: "Probe serial", type: "text", hint: "Leading zeros are ignored." },
+      { path: p("device"), label: "J-Link device", type: "text", hint: "Used for RTT, for example nRF9161_xxCA." },
+      { path: p("runner"), label: "Flash runner", type: "text", hint: "Empty uses the build's default." },
+    ]],
+    ["Console", [
+      { path: p("console"), label: "Mode", type: "select", options: ["auto", "uart", "rtt"], hint: "auto picks RTT only when the build has CONFIG_RTT_CONSOLE=y and no UART console." },
+      { path: p("ports"), label: "Serial ports", type: "ports" },
+    ]],
+    ["Power", [
+      { path: p("power.kind"), label: "Supply", type: "select", options: supplies },
+      { path: p("power.serial"), label: "Supply serial", type: "text" },
+      { path: p("power.mv_min"), label: "Lowest voltage", type: "number", unit: "mV" },
+      { path: p("power.mv_max"), label: "Highest voltage", type: "number", unit: "mV", hint: "Refused outside this range, for agents and you alike." },
+      { path: p("power.default_mv"), label: "Lease starts at", type: "number", unit: "mV", hint: "Agents need your OK to go above it." },
+      { path: p("power.ma_max"), label: "Current limit", type: "number", unit: "mA", hint: "Over this, arbiter switches the supply off. Empty means no limit." },
+      { path: p("power.allow_agent_raise_voltage"), label: "Agents may raise voltage", type: "bool" },
+    ]],
+    ["Agent rules", [
+      { path: p("allow_agent_erase"), label: "Agents may erase", type: "bool", hint: "When off, erase and recover ask you first." },
+      { path: p("max_lease_min"), label: "Longest lease", type: "number", unit: "min", hint: "Empty uses the daemon's limit." },
+    ]],
+    ["Custom commands", [
+      { path: p("commands"), label: "Commands", type: "map", hint: "Shell commands that replace a board action, such as reset or power." },
+    ]],
+  ];
+}
+
+const TIMING_FORM = [
+  { path: "timing.lease_ttl_s", label: "Lease length", type: "number", unit: "s", hint: "An agent's lease runs out after this unless it extends." },
+  { path: "timing.max_hold_s", label: "Longest hold", type: "number", unit: "s", hint: "No agent keeps a board longer than this in one go." },
+  { path: "timing.heartbeat_timeout_s", label: "Agent counts as gone after", type: "number", unit: "s" },
+  { path: "timing.grace_s", label: "Grace before losing a lease", type: "number", unit: "s" },
+  { path: "timing.claim_timeout_s", label: "Claim a granted board within", type: "number", unit: "s" },
+  { path: "timing.ticket_ttl_s", label: "Queue ticket expires after", type: "number", unit: "s" },
+  { path: "timing.max_wait_s", label: "Longest single wait call", type: "number", unit: "s" },
+  { path: "timing.idle_session_s", label: "Drop an idle agent after", type: "number", unit: "s" },
+];
+
+const DAEMON_FORM = [
+  { path: "daemon.human_name", label: "Your name", type: "text", hint: "Shown to agents and in the logs." },
+  { path: "daemon.host", label: "Listen address", type: "text", hint: "Keep 127.0.0.1 unless other machines must reach arbiterd." },
+  { path: "daemon.port", label: "Port", type: "number" },
+  { path: "daemon.toolchain_env", label: "NCS toolchain environment.json", type: "text" },
+  { path: "daemon.zephyr_base", label: "Zephyr base", type: "text" },
+  { path: "daemon.plugin_paths", label: "Plugin folders", type: "list" },
+];
+
+const NEW_BOARD_FORM = () => [
+  { path: "new.id", label: "Board id", type: "text", hint: "Lowercase, for example nrf5340dk-1. It can't be renamed later." },
+  { path: "new.driver", label: "Driver", type: "select", options: (daemonCfg.plugins && daemonCfg.plugins.drivers) || ["sim"] },
+  { path: "new.platform", label: "Platform", type: "text" },
+  { path: "new.probe_serial", label: "Probe serial", type: "text" },
+];
+
+function formFor(scope) {
+  if (scope === "timing") return TIMING_FORM;
+  if (scope === "daemon") return DAEMON_FORM;
+  if (scope === "new") return NEW_BOARD_FORM();
+  return boardForm(scope.slice("board:".length)).flatMap(([, f]) => f);
+}
+
+// The value shown in the form: the edit if there is one, else what the config holds.
+function cur(fd) {
+  if (fd.path in edit.values) return edit.values[fd.path];
+  const v = fd.path.startsWith("new.") ? { driver: "sim" }[fd.path.slice(4)] : getPath(cfgNow(), fd.path);
+  if (fd.type === "map") return Object.entries(v || {}).map(([k, x]) => [k, typeof x === "string" ? x : JSON.stringify(x)]);
+  if (fd.type === "ports") return (v || []).map((x) => ({ ...x }));
+  return v;
+}
+
+// {path: value} for everything that differs from the config.
+function changes() {
+  const cfg = cfgNow();
+  const out = {};
+  if (edit.scope === "new") {
+    const v = (k) => { const x = edit.values[`new.${k}`]; return typeof x === "string" ? x.trim() : x; };
+    if (!v("id")) return out;
+    const board = { driver: v("driver") || "sim" };
+    if (v("platform")) board.platform = v("platform");
+    if (v("probe_serial")) board.probe_serial = v("probe_serial");
+    out[`boards.${v("id")}`] = board;
+    return out;
+  }
+  for (const fd of formFor(edit.scope || "")) {
+    if (!(fd.path in edit.values)) continue;
+    const before = getPath(cfg, fd.path);
+    let after = edit.values[fd.path];
+    if (fd.type === "map") {
+      const obj = Object.fromEntries(after.filter(([k]) => k.trim()).map(([k, x]) => [k.trim(), x]));
+      for (const k of new Set([...Object.keys(before || {}), ...Object.keys(obj)])) {
+        const b = before ? before[k] : undefined;
+        if (!(k in obj)) out[`${fd.path}.${k}`] = null;
+        else if (JSON.stringify(typeof b === "string" ? b : JSON.stringify(b)) !== JSON.stringify(obj[k])) out[`${fd.path}.${k}`] = obj[k];
+      }
+      continue;
+    }
+    if (fd.type === "ports") after = after.map(cleanPort);
+    if (JSON.stringify(after) !== JSON.stringify(before === undefined ? null : before)) out[fd.path] = after;
+  }
+  return out;
+}
+
+function cleanPort(p) {
+  const num = (x) => (x === "" || x === null || x === undefined ? null : Number(x));
+  const str = (x) => (x === "" || x === undefined ? null : x);
+  return { ...p, role: p.role || "app", name: str(p.name), vcom: num(p.vcom), interface: num(p.interface), port: str(p.port), baud: num(p.baud) || 115200 };
+}
+
+function startEdit(scope) {
+  if (edit.scope && edit.scope !== scope && Object.keys(changes()).length && !confirm("Drop your unsaved changes?")) return;
+  Object.assign(edit, { scope, values: {}, errors: [], busy: false, conflict: false });
+  edit.rev++;
+  renderSettings();
+}
+
+function stopEdit() {
+  Object.assign(edit, { scope: null, values: {}, errors: [], busy: false, conflict: false });
+  edit.rev++;
+  renderSettings();
+}
+
+function setValue(path, value, structural) {
+  edit.values[path] = value;
+  if (structural) { edit.rev++; renderSettings(); }
+  clearTimeout(edit.timer);
+  edit.timer = setTimeout(() => postConfig(true), 350);
+  updateForm();
+}
+
+async function postConfig(dryRun) {
+  const cfg = cfgNow();
+  const set = changes();
+  if (!cfg || !Object.keys(set).length) { edit.errors = []; updateForm(); return null; }
+  const n = ++edit.check;
+  if (!dryRun) { edit.busy = true; edit.rev++; renderSettings(); }
+  try {
+    const res = await api("POST", "/api/admin/config", { version: cfg.version, set, dry_run: dryRun });
+    if (n !== edit.check) return null;
+    edit.errors = [];
+    if (!dryRun) {
+      const restart = res.restart_needed || [];
+      toast(restart.length ? `Saved. ${plural(restart.length, "change")} ${restart.length === 1 ? "applies" : "apply"} after you restart arbiterd.` : "Saved and applied.", restart.length ? "warn" : "");
+      Object.assign(edit, { scope: null, values: {}, busy: false, conflict: false });
+      await loadSettings();
+      refreshSoon();
+    }
+    return res;
+  } catch (e) {
+    if (n !== edit.check) return null;
+    edit.busy = false;
+    const body = e.body || {};
+    if (e.status === 422) edit.errors = body.errors || [{ path: "", message: e.message }];
+    else if (e.status === 409) edit.conflict = true;
+    else if (e.status === 401) showLogin("The token was refused. arbiterd makes a new one each time it starts.");
+    else edit.errors = [{ path: "", message: e.message }];
+    edit.rev++;
+    renderSettings();
+    return null;
+  } finally {
+    updateForm();
+  }
+}
+
+async function reloadKeepingEdits() {
+  edit.conflict = false;
+  await loadSettings();
+  postConfig(true);
+}
+
+// Show errors and the change count without re-rendering the inputs being typed in.
+function updateForm() {
+  const form = document.querySelector("#settings .edit-form");
+  if (!form) return;
+  const n = Object.keys(changes()).length;
+  const shown = new Set();
+  for (const el of form.querySelectorAll(".efield[data-path]")) {
+    const p = el.dataset.path;
+    const mine = edit.errors.filter((e) => e.path === p || e.path.startsWith(`${p}.`));
+    mine.forEach((e) => shown.add(e));
+    el.classList.toggle("bad", mine.length > 0);
+    fill(el.querySelector(".ferr"), mine.map((e) => h("div", {}, e.message)));
+  }
+  const rest = edit.errors.filter((e) => !shown.has(e));
+  fill(form.querySelector(".form-errs"), rest.map((e) => h("div", { class: "alert err" }, h("span", { class: "text" }, e.path ? `${e.path}: ${e.message}` : e.message))));
+  const save = form.querySelector("button.save");
+  save.disabled = edit.busy || !n || edit.errors.length > 0 || edit.conflict;
+  save.textContent = edit.busy ? "Saving…" : n ? `Save ${plural(n, "change")}` : "Save";
+}
+
+function inputFor(fd) {
+  const v = cur(fd);
+  const on = (val, structural) => setValue(fd.path, val, structural);
+  switch (fd.type) {
+    case "bool":
+      return h("input", { type: "checkbox", class: "switch", checked: !!v, onchange: (ev) => on(ev.target.checked) });
+    case "select": {
+      const opts = [...new Set([...(fd.options || []), ...(v ? [v] : [])])];
+      return h("select", { onchange: (ev) => on(ev.target.value) }, opts.map((o) => h("option", { value: o, selected: o === v }, o)));
+    }
+    case "number":
+      return h("span", { class: "with-unit" },
+        h("input", { type: "number", step: "any", value: v === null || v === undefined ? "" : String(v), placeholder: "default",
+          oninput: (ev) => on(ev.target.value === "" ? null : Number(ev.target.value)) }),
+        fd.unit ? h("span", { class: "unit" }, fd.unit) : null);
+    case "list":
+      return h("input", { type: "text", value: (v || []).join(", "), oninput: (ev) => on(ev.target.value.split(",").map((s) => s.trim()).filter(Boolean)) });
+    case "ports": {
+      const rows = v;
+      const upd = (i, k, x) => { rows[i] = { ...rows[i], [k]: x }; on(rows); };
+      return h("div", { class: "rows" },
+        rows.length ? h("div", { class: "port-row head" }, ["Role", "Name", "VCOM", "Port", "Baud", ""].map((t) => h("span", {}, t))) : null,
+        rows.map((r, i) => h("div", { class: "port-row" },
+          h("select", { onchange: (ev) => upd(i, "role", ev.target.value) }, ["app", "aux"].map((o) => h("option", { selected: r.role === o }, o))),
+          h("input", { value: r.name || "", placeholder: r.role === "app" ? "app" : "name", oninput: (ev) => upd(i, "name", ev.target.value) }),
+          h("input", { type: "number", value: r.vcom === null || r.vcom === undefined ? "" : String(r.vcom), placeholder: "auto", oninput: (ev) => upd(i, "vcom", ev.target.value) }),
+          h("input", { value: r.port || "", placeholder: "COM7 or /dev/…", oninput: (ev) => upd(i, "port", ev.target.value) }),
+          h("input", { type: "number", value: String(r.baud || 115200), oninput: (ev) => upd(i, "baud", ev.target.value) }),
+          h("button", { class: "icon", title: "Remove this port", onclick: () => { rows.splice(i, 1); on(rows, true); } }, "×"))),
+        h("button", { class: "small", onclick: () => { rows.push({ role: rows.length ? "aux" : "app", name: null, vcom: rows.length, interface: null, port: null, baud: 115200 }); on(rows, true); } }, "Add port"));
+    }
+    case "map": {
+      const rows = v;
+      return h("div", { class: "rows" },
+        rows.map(([k, x], i) => h("div", { class: "map-row" },
+          h("input", { value: k, placeholder: "action", oninput: (ev) => { rows[i] = [ev.target.value, rows[i][1]]; on(rows); } }),
+          h("input", { class: "mono", value: x, placeholder: "command", oninput: (ev) => { rows[i] = [rows[i][0], ev.target.value]; on(rows); } }),
+          h("button", { class: "icon", title: "Remove", onclick: () => { rows.splice(i, 1); on(rows, true); } }, "×"))),
+        h("button", { class: "small", onclick: () => { rows.push(["", ""]); on(rows, true); } }, "Add command"));
+    }
+    default:
+      return h("input", { type: "text", value: v === null || v === undefined ? "" : String(v), oninput: (ev) => on(ev.target.value === "" ? null : ev.target.value) });
+  }
+}
+
+function efield(fd) {
+  const when = fd.path.startsWith("new.") ? null : isLive(fd.path) ? h("span", { class: "tag" }, "applies now") : h("span", { class: "tag restart" }, "after restart");
+  return h("div", { class: `efield ${fd.type === "ports" || fd.type === "map" ? "wide" : ""}`, "data-path": fd.path },
+    h("label", { class: "label" }, fd.label, when),
+    inputFor(fd),
+    fd.hint ? h("div", { class: "hint" }, fd.hint) : null,
+    h("div", { class: "ferr" }));
+}
+
+function editForm(groups, extra) {
+  return h("div", { class: "edit-form" },
+    edit.conflict ? h("div", { class: "alert warn" },
+      h("span", { class: "text" }, "config.toml changed since this page read it, maybe by hand. Reload it to see the current values; your edits are kept."),
+      h("button", { class: "small", onclick: reloadKeepingEdits }, "Reload")) : null,
+    groups.map(([title, fields]) => h("div", { class: "set-group" }, title ? h("h3", {}, title) : null, h("div", { class: "efields" }, fields.map(efield)))),
+    h("div", { class: "form-errs" }),
+    h("div", { class: "btn-row form-actions" },
+      h("button", { class: "primary save", onclick: () => postConfig(false) }, "Save"),
+      h("button", { onclick: () => { if (!Object.keys(changes()).length || confirm("Drop your unsaved changes?")) stopEdit(); } }, "Cancel"),
+      extra || null));
+}
+
+function editButton(scope, label) {
+  const cfg = cfgNow();
+  if (!cfg) return null;
+  return h("button", { class: "small", disabled: !!edit.scope && edit.scope !== scope, onclick: () => startEdit(scope) }, label || "Edit");
+}
+
+async function removeBoard(id) {
+  const b = state.boards.find((x) => x.id === id);
+  if (b && b.lease && !confirm(`${id} is in use by ${who(b.lease.holder)}. Remove it from the config anyway? It stays until arbiterd restarts.`)) return;
+  if (!confirm(`Remove ${id} from config.toml?`)) return;
+  edit.values = {};
+  const cfg = cfgNow();
+  try {
+    const res = await api("POST", "/api/admin/config", { version: cfg.version, set: { [`boards.${id}`]: null } });
+    toast((res.restart_needed || []).length ? `${id} removed. It goes away when arbiterd restarts.` : `${id} removed.`, (res.restart_needed || []).length ? "warn" : "");
+    stopEdit();
+    await loadSettings();
+  } catch (e) {
+    if (e.status === 409) { edit.conflict = true; edit.rev++; renderSettings(); } else toast(`Remove ${id}: ${e.message}`, "err");
+  }
 }
 
 function toggle(label, on, set, hint) {
@@ -1377,7 +1746,7 @@ async function start() {
     showPage();
     connectEvents();
   } catch (e) {
-    showLogin(e.status === 401 ? "That token was refused. Use the admin token (admin.json), not the agent token." : `Can't reach arbiterd: ${e.message}`);
+    showLogin(e.status === 401 || e.status === 403 ? "That token was refused. Use the admin token (admin.json), not the agent token." : `Can't reach arbiterd: ${e.message}`);
   }
 }
 
