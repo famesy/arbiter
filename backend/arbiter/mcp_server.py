@@ -480,6 +480,24 @@ async def last_good(
 
 
 @mcp.tool()
+async def tracing(
+    action: str = "status",
+    channel: str | None = None,
+    build_dir: str | None = None,
+    lease_token: str | None = None,
+) -> dict[str, Any]:
+    """Zephyr CTF tracing (CONFIG_TRACING_CTF, UART backend): action="start" records the trace stream
+    from `channel` (default "uart:tracing" if configured, else the console), "stop" decodes it with
+    Zephyr's CTF metadata and babeltrace2 and returns event counts, thread switches per thread and ISR
+    rate, plus a trace directory for Trace Compass."""
+    return await shim.call(
+        "/api/tracing",
+        {"lease_token": lease_token, "action": action, "channel": channel, "build_dir": build_dir},
+        need_lease=True,
+    )
+
+
+@mcp.tool()
 async def thread_health(warn_pct: int = 80, lease_token: str | None = None) -> dict[str, Any]:
     """Every thread's peak stack use (size, used, %), priority and state, from the kernel shell
     (`kernel thread list`) or the thread analyzer's report, with warnings for threads at or above

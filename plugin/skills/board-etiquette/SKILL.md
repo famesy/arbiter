@@ -179,6 +179,13 @@ instead: flash a working image, then `arbiter release`. Exit codes: `0` OK, `75`
   `CONFIG_THREAD_STACK_INFO=y` and `CONFIG_INIT_STACKS=y`, or
   `CONFIG_THREAD_ANALYZER=y`.
 
+## Tracing
+
+- To see scheduling (which threads run, how often, ISR load), build with
+  `CONFIG_TRACING=y CONFIG_TRACING_CTF=y CONFIG_TRACING_BACKEND_UART=y`,
+  call `tracing(action="start")`, exercise the board, then
+  `tracing(action="stop")` for a summary and a trace directory.
+
 ## nRF91 modem
 
 - `at(cmd="AT+CEREG?")` sends one AT command through your app (needs

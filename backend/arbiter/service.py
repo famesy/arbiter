@@ -21,9 +21,11 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from . import config_edit as ce
+from . import ctf
 from . import scheduler as sch
 from .baselines import Baselines, check_limits
 from .baselines import compare as compare_baseline
+from .capture import Capture
 from .config import BoardConfig, Config, config_from_dict, load_toolchain_env
 from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, image_dirs
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
@@ -162,7 +164,8 @@ class BoardRuntime:
     crashes: deque[Crash] = field(default_factory=lambda: deque(maxlen=20))
     debug: DebugSession | None = None  # gdb attached through the board's GDB server
     debug_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    trace: dict[str, Any] | None = None  # a modem trace capture in progress
+    trace: Capture | None = None  # a modem trace capture in progress
+    ctf: Capture | None = None  # a CTF tracing capture in progress
     boot_mark: dict[str, int] = field(default_factory=dict)  # channel ends at the last flash/reset
 
 
@@ -345,6 +348,7 @@ class Arbiter:
         await self._cancel_waits(rt)
         await self._debug_close(rt)
         await self._trace_stop(rt)
+        await self._ctf_stop(rt)
         if rt.op and rt.op.lease_id == lease_d["id"] and rt.op.task and not rt.op.task.done():
             rt.op.task.cancel()
         live = {k for k, le in self.sched.leases.items() if le.state in sch.LIVE_LEASE_STATES}
@@ -1724,17 +1728,7 @@ class Arbiter:
             if rt.trace is not None:
                 return {"status": "already_running", **self._trace_view(rt)}
             path = self._lease_dir(lease) / f"modem-trace-{time.strftime('%H%M%S')}.bin"
-            fh = await asyncio.to_thread(path.open, "wb")
-
-            def listener(channel: str, data: bytes, _end: int) -> None:
-                if channel == "modem-trace":
-                    fh.write(data)
-                    assert rt.trace is not None
-                    rt.trace["bytes"] += len(data)
-
-            rt.trace = {"path": path, "fh": fh, "listener": listener, "bytes": 0}
-            rt.trace["started"] = time.time()
-            rt.hub.listeners.append(listener)
+            rt.trace = await Capture.open(rt.hub, "modem-trace", path)
             try:
                 await rt.driver.modem_trace(True)
             except BaseException:
@@ -1766,25 +1760,88 @@ class Arbiter:
 
     @staticmethod
     def _trace_view(rt: BoardRuntime) -> dict[str, Any]:
-        if rt.trace is None:
-            return {}
-        return {
-            "raw": str(rt.trace["path"]),
-            "bytes": rt.trace["bytes"],
-            "seconds": round(time.time() - rt.trace["started"], 1),
-        }
+        return rt.trace.view() if rt.trace else {}
 
     async def _trace_stop(self, rt: BoardRuntime) -> dict[str, Any] | None:
         if rt.trace is None:
             return None
-        view = self._trace_view(rt)
         trace, rt.trace = rt.trace, None
         with contextlib.suppress(Exception):
             await rt.driver.modem_trace(False)
-        with contextlib.suppress(ValueError):
-            rt.hub.listeners.remove(trace["listener"])
-        await asyncio.to_thread(trace["fh"].close)
-        return view
+        return await trace.close()
+
+    # ------------------------------------------------------------------ CTF tracing
+    async def tracing(
+        self,
+        session_id: str | None,
+        token: str,
+        action: str = "status",
+        channel: str | None = None,
+        build_dir: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture Zephyr's CTF trace stream from a console channel, then decode and
+        summarise it with Zephyr's CTF metadata and babeltrace2."""
+        lease, rt = self._check(token, session_id)
+        if action == "start":
+            if rt.ctf is not None:
+                return {"status": "already_running", **rt.ctf.view()}
+            if channel is None and "uart:tracing" in rt.hub.channels:
+                channel = "uart:tracing"
+            name = rt.hub.resolve(channel)
+            path = self._lease_dir(lease) / f"ctf-{time.strftime('%H%M%S')}.bin"
+            rt.ctf = await Capture.open(rt.hub, name, path)
+            rt.hub.annotate(f"[arbiter] capturing CTF tracing from {name}")
+            return {
+                "status": "capturing",
+                **rt.ctf.view(),
+                "hint": "The image needs CONFIG_TRACING=y, CONFIG_TRACING_CTF=y and "
+                "CONFIG_TRACING_BACKEND_UART=y. If the tracing UART is the console's, the "
+                "console shows binary while tracing. Call tracing(action='stop') for the summary.",
+            }
+        if action == "stop":
+            if rt.ctf is None:
+                return {"status": "not_running"}
+            view = await self._ctf_stop(rt)
+            assert view is not None
+            if not view["bytes"]:
+                view["hint"] = "No bytes arrived on the channel: is tracing enabled in the image?"
+                return {"status": "stopped", **view}
+            top = Path(build_dir) if build_dir else None
+            if top is None and rt.image is not None:
+                top = Path(rt.image["build_dir"])
+            if top is None:
+                view["hint"] = "Pass build_dir to decode: arbiter didn't flash this board."
+                return {"status": "stopped", **view}
+            view.update(await asyncio.to_thread(self._ctf_decode, Path(view["raw"]), top))
+            view["note"] = UNTRUSTED
+            return {"status": "stopped", **view}
+        if action == "status":
+            if rt.ctf is None:
+                return {"status": "not_running"}
+            return {"status": "capturing", **rt.ctf.view()}
+        raise ArbiterError("BAD_REQUEST", "action is start, stop or status")
+
+    @staticmethod
+    def _ctf_decode(raw: Path, build_dir: Path) -> dict[str, Any]:
+        meta = ctf.metadata_for(build_dir)
+        if isinstance(meta, str):
+            return {"error": meta}
+        directory = ctf.trace_dir(raw, meta)
+        out: dict[str, Any] = {"trace_dir": str(directory)}
+        text, err = ctf.babeltrace(directory)
+        if text:
+            out["summary"] = ctf.summarize(text)
+        if err:
+            out["error"] = err
+            if text is None:
+                out["hint"] = "Install babeltrace2 to decode, or open trace_dir in Trace Compass."
+        return out
+
+    async def _ctf_stop(self, rt: BoardRuntime) -> dict[str, Any] | None:
+        if rt.ctf is None:
+            return None
+        cap, rt.ctf = rt.ctf, None
+        return await cap.close()
 
     # ------------------------------------------------------------------ run (tests)
     async def run(
