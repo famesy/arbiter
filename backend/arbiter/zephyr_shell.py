@@ -23,12 +23,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .console.detect import image_dirs
 from .elf import EM_X86_64, Elf, ElfError
 
 MAX_DEPTH = 8
+# Zephyr 4.x SHELL_HELP(): the help pointer is a struct shell_cmd_help {magic, description,
+# usage} starting with this word instead of a string.
+STRUCTURED_HELP_MAGIC = 0x86D20BC4
 MAX_CHILDREN = 1024
 
 
@@ -36,6 +39,7 @@ MAX_CHILDREN = 1024
 class ShellCommand:
     name: str
     help: str | None = None
+    usage: str | None = None  # from structured help (SHELL_HELP), when the image has it
     mandatory: int = 0  # argument counts include the command itself, as in Zephyr
     optional: int = 0
     dynamic: bool = False  # subcommands are generated at run time and not listed
@@ -69,6 +73,7 @@ class _Reader:
         if elf.is64 and elf.machine == EM_X86_64:
             size += 24  # Z_SHELL_STATIC_ENTRY_PADDING on native_sim 64-bit and x86_64
         self.entry_size = size
+        self.order: Literal["little", "big"] = "big" if elf.end == ">" else "little"
         self.dynamic = self._range("shell_dynamic_subcmds")
         self.section = self._range("shell_subcmds")
 
@@ -87,16 +92,25 @@ class _Reader:
         help_ptr, subcmd = e.ptr(addr + p), e.ptr(addr + 2 * p)
         cmd = ShellCommand(
             name=e.cstr(syntax, 256),
-            help=e.cstr(help_ptr) if help_ptr else None,
             mandatory=e.u8(addr + 4 * p),
             optional=e.u8(addr + 4 * p + 1),
         )
+        if help_ptr:
+            cmd.help, cmd.usage = self.help(help_ptr)
         if subcmd:
             if self._within(subcmd, self.dynamic):
                 cmd.dynamic = True
             elif depth < MAX_DEPTH:
                 cmd.subcommands = self.children(subcmd, depth + 1)
         return cmd
+
+    def help(self, addr: int) -> tuple[str | None, str | None]:
+        """(description, usage) of a help pointer: a plain string, or structured help."""
+        e, p = self.elf, self.elf.ptr_size
+        if e.read(addr, 4) == STRUCTURED_HELP_MAGIC.to_bytes(4, self.order):
+            desc, usage = e.ptr(addr + p), e.ptr(addr + 2 * p)  # magic is padded to a pointer
+            return (e.cstr(desc) if desc else None, e.cstr(usage) if usage else None)
+        return e.cstr(addr), None
 
     def children(self, subcmd: int, depth: int) -> list[ShellCommand]:
         if self._within(subcmd, self.section):
