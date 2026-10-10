@@ -359,6 +359,39 @@ async def shell_exec(
 
 
 @mcp.tool()
+async def at(cmd: str, timeout_s: float = 10, lease_token: str | None = None) -> dict[str, Any]:
+    """nRF91: send one AT command to the modem through your board's app (its `at` shell command, or a
+    raw AT console such as at_client) and return the result lines and OK / ERROR. Commands that wipe
+    the modem or its credentials are refused."""
+    return await shim.call(
+        "/api/modem/at",
+        {"lease_token": lease_token, "cmd": cmd, "timeout_s": timeout_s},
+        need_lease=True,
+    )
+
+
+@mcp.tool()
+async def lte_status(timeout_s: float = 10, lease_token: str | None = None) -> dict[str, Any]:
+    """nRF91: is the modem on LTE? Functional mode, registration, operator and cell, LTE-M/NB-IoT,
+    band, RSRP/SNR in dB, PDN/APN and IP, ICCID and modem firmware, with hints when it isn't."""
+    return await shim.call(
+        "/api/modem/lte-status",
+        {"lease_token": lease_token, "timeout_s": timeout_s},
+        need_lease=True,
+    )
+
+
+@mcp.tool()
+async def modem_trace(action: str = "status", lease_token: str | None = None) -> dict[str, Any]:
+    """nRF91: capture the modem trace (image built with -S nrf91-modem-trace-uart). action: start,
+    stop or status. stop returns the raw file and, when nrfutil's trace command is installed, a PcapNG
+    for Wireshark."""
+    return await shim.call(
+        "/api/modem/trace", {"lease_token": lease_token, "action": action}, need_lease=True
+    )
+
+
+@mcp.tool()
 async def image_info(build_dir: str) -> dict[str, Any]:
     """What a build contains, no board needed: board target, sysbuild images, MCUboot/TF-M, partitions,
     key Kconfig options (console, logging mode, asserts, coredump, thread info), flash/RAM use with the

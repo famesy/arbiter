@@ -216,7 +216,9 @@ class WestDriver(BoardDriver):
 
 class NrfDriver(WestDriver):
     kind = "nrf"
-    capabilities = frozenset({"flash", "reset", "recover", "console", "rtt", "run", "debug"})
+    capabilities = frozenset(
+        {"flash", "reset", "recover", "console", "rtt", "run", "debug", "modem_trace"}
+    )
     default_runner = "nrfutil"  # what `west flash` uses for these boards in NCS v3
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
@@ -275,6 +277,42 @@ class NrfDriver(WestDriver):
 
     def _sn(self) -> list[str]:
         return ["--serial-number", self.cfg.probe_serial or ""]
+
+    def _trace_port(self) -> PortConfig:
+        """Where modem traces come out: a port with role "trace", else the aux port on VCOM1
+        (TF-M's log, which the nrf91-modem-trace-uart snippet turns into the trace UART)."""
+        for p in self.cfg.ports:
+            if p.role == "trace":
+                return p
+        for p in self.cfg.ports:
+            if p.role == "aux" and (p.vcom == 1 or p.name == "tfm"):
+                return p
+        return PortConfig(role="aux", name="tfm", vcom=1)
+
+    async def modem_trace(self, on: bool) -> None:
+        if not self.cfg.platform.startswith(("nrf91", "thingy91")):
+            raise ArbiterError("NOT_SUPPORTED", f"{self.cfg.platform} has no LTE modem")
+        port = self._trace_port()
+        aux = f"uart:{port.name or 'aux'}"
+        if on:
+            await self.hub.detach(aux)
+            await self.hub.attach(
+                UartSource(
+                    functools.partial(self.resolve, port),
+                    port.baud if port.role == "trace" else 1_000_000,
+                    name="modem-trace",
+                    writable=False,
+                    rtscts=True,
+                )
+            )
+            return
+        await self.hub.detach("modem-trace")
+        if port.role == "aux" and port in self.cfg.ports:
+            await self.hub.attach(
+                UartSource(
+                    functools.partial(self.resolve, port), port.baud, name=aux, writable=False
+                )
+            )
 
     async def reset(self, *, halt: bool, log_path: Path) -> dict[str, Any]:
         if halt:

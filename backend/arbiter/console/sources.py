@@ -29,8 +29,10 @@ class UartSource:
         baud: int = 115200,
         name: str = "uart:app",
         writable: bool = True,
+        rtscts: bool = False,
     ):
         self.name = name
+        self.rtscts = rtscts
         self.writable = writable
         self.resolve = resolve
         self.baud = baud
@@ -62,11 +64,10 @@ class UartSource:
                 backoff *= 1.5
                 continue
             try:
-                self._ser = (
-                    serial.Serial(port, self.baud, timeout=0.1, exclusive=True)
-                    if hasattr(serial.Serial, "exclusive")
-                    else serial.Serial(port, self.baud, timeout=0.1)
-                )
+                kw: dict[str, Any] = {"timeout": 0.1, "rtscts": self.rtscts}
+                if hasattr(serial.Serial, "exclusive"):
+                    kw["exclusive"] = True
+                self._ser = serial.Serial(port, self.baud, **kw)
             except (OSError, ValueError, serial.SerialException) as e:
                 log.debug("open %s failed: %s", port, e)
                 time.sleep(min(backoff, 2.0))

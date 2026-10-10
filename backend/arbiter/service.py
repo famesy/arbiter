@@ -33,6 +33,7 @@ from .errors import ArbiterError
 from .gdb import DebugSession
 from .history import History, compare, named_tests
 from .imageinfo import describe_build, fingerprint, git_state
+from .nrf91 import FINAL_RX, STATUS_COMMANDS, check_at, convert_trace, response, summarize
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
@@ -150,6 +151,7 @@ class BoardRuntime:
     crashes: deque[Crash] = field(default_factory=lambda: deque(maxlen=20))
     debug: DebugSession | None = None  # gdb attached through the board's GDB server
     debug_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    trace: dict[str, Any] | None = None  # a modem trace capture in progress
 
 
 class Arbiter:
@@ -328,6 +330,7 @@ class Arbiter:
         state = data.get("state") or lease_d["state"]
         await self._cancel_waits(rt)
         await self._debug_close(rt)
+        await self._trace_stop(rt)
         if rt.op and rt.op.lease_id == lease_d["id"] and rt.op.task and not rt.op.task.done():
             rt.op.task.cancel()
         live = {k for k, le in self.sched.leases.items() if le.state in sch.LIVE_LEASE_STATES}
@@ -1421,6 +1424,140 @@ class Arbiter:
         out["resumed"] = True
         out["note"] = UNTRUSTED
         return out
+
+    # ------------------------------------------------------------------ nRF91 modem
+    async def at(
+        self, session_id: str | None, token: str, cmd: str, timeout_s: float = 10
+    ) -> dict[str, Any]:
+        """One AT command through the app: the `at` shell command if the image has one,
+        else a raw AT console (at_client, Serial LTE Modem)."""
+        lease, rt = self._check(token, session_id)
+        try:
+            cmd = check_at(cmd)
+        except ValueError as e:
+            raise ArbiterError("BAD_REQUEST", str(e)) from None
+        except PermissionError as e:
+            raise ArbiterError(
+                "NOT_ALLOWED", str(e), hint="Ask the human if this is really needed."
+            ) from None
+        mode = str(rt.cfg.options.get("at_mode") or "auto")
+        names = {c["name"] for c in (rt.shell or {}).get("commands") or []}
+        if mode == "shell" or (mode == "auto" and "at" in names):
+            res = await self.shell_exec(session_id, token, f"at {cmd}", timeout_s)
+            out = response(res.get("untrusted_device_output", "").splitlines())
+            out["via"] = "at shell command"
+            for key in ("crash", "hint", "error"):
+                if res.get(key) and not out["final"]:
+                    out[key] = res[key]
+        else:
+            name = rt.hub.primary
+            start = rt.hub.end(name)
+            await self.write(session_id, token, cmd, True)
+            m = await self._wait_task(
+                rt, rt.hub.expect(FINAL_RX, timeout_s, {name: start}, [name]), lease
+            )
+            end = m["cursor"] if m["matched"] else rt.hub.end(name)
+            raw = rt.hub.channels[name].since(start)[: end - start]
+            lines = _shell_lines(raw.decode(errors="replace"))
+            if lines and lines[0].strip().upper() == cmd.upper():
+                lines = lines[1:]  # echo
+            out = response(lines)
+            out["via"] = "raw AT console"
+            if m["matched"]:
+                self.marks.setdefault(token, {})[name] = m["cursor"]
+            else:
+                out["hint"] = (
+                    "No OK or ERROR. The app needs an AT path: CONFIG_AT_SHELL=y (then flash it "
+                    "through arbiter so its shell commands are known), or an AT console such "
+                    "as the at_client sample."
+                )
+        out["cmd"] = cmd
+        out["note"] = UNTRUSTED
+        return out
+
+    async def lte_status(
+        self, session_id: str | None, token: str, timeout_s: float = 10
+    ) -> dict[str, Any]:
+        replies: dict[str, dict[str, Any]] = {}
+        for cmd in STATUS_COMMANDS:
+            r = await self.at(session_id, token, cmd, timeout_s)
+            replies[cmd] = r
+            if r["final"] is None:  # no AT path at all: don't wait for the rest
+                return {"ok": False, "hint": r.get("hint"), "failed_commands": [cmd]}
+        out = summarize(replies)
+        out["note"] = UNTRUSTED
+        return out
+
+    async def modem_trace(
+        self, session_id: str | None, token: str, action: str = "status"
+    ) -> dict[str, Any]:
+        lease, rt = self._check(token, session_id)
+        if action == "start":
+            self._need(rt, "modem_trace")
+            if rt.trace is not None:
+                return {"status": "already_running", **self._trace_view(rt)}
+            path = self._lease_dir(lease) / f"modem-trace-{time.strftime('%H%M%S')}.bin"
+            fh = await asyncio.to_thread(path.open, "wb")
+
+            def listener(channel: str, data: bytes, _end: int) -> None:
+                if channel == "modem-trace":
+                    fh.write(data)
+                    assert rt.trace is not None
+                    rt.trace["bytes"] += len(data)
+
+            rt.trace = {"path": path, "fh": fh, "listener": listener, "bytes": 0}
+            rt.trace["started"] = time.time()
+            rt.hub.listeners.append(listener)
+            try:
+                await rt.driver.modem_trace(True)
+            except BaseException:
+                await self._trace_stop(rt)
+                raise
+            rt.hub.annotate("[arbiter] capturing the modem trace")
+            return {
+                "status": "capturing",
+                **self._trace_view(rt),
+                "hint": "The image needs the nrf91-modem-trace-uart snippet (traces on VCOM1 at "
+                "1 Mbaud). Call modem_trace(action='stop') to get the file.",
+            }
+        if action == "stop":
+            if rt.trace is None:
+                return {"status": "not_running"}
+            view = await self._trace_stop(rt)
+            assert view is not None
+            if view["bytes"]:
+                view.update(await asyncio.to_thread(convert_trace, Path(view["raw"])))
+            else:
+                view["hint"] = (
+                    "No trace bytes arrived. Build with the nrf91-modem-trace-uart snippet "
+                    "(-S nrf91-modem-trace-uart) and let the modem run while capturing."
+                )
+            return {"status": "stopped", **view}
+        if action == "status":
+            return {"status": "capturing" if rt.trace else "not_running", **self._trace_view(rt)}
+        raise ArbiterError("BAD_REQUEST", "action is start, stop or status")
+
+    @staticmethod
+    def _trace_view(rt: BoardRuntime) -> dict[str, Any]:
+        if rt.trace is None:
+            return {}
+        return {
+            "raw": str(rt.trace["path"]),
+            "bytes": rt.trace["bytes"],
+            "seconds": round(time.time() - rt.trace["started"], 1),
+        }
+
+    async def _trace_stop(self, rt: BoardRuntime) -> dict[str, Any] | None:
+        if rt.trace is None:
+            return None
+        view = self._trace_view(rt)
+        trace, rt.trace = rt.trace, None
+        with contextlib.suppress(Exception):
+            await rt.driver.modem_trace(False)
+        with contextlib.suppress(ValueError):
+            rt.hub.listeners.remove(trace["listener"])
+        await asyncio.to_thread(trace["fh"].close)
+        return view
 
     # ------------------------------------------------------------------ run (tests)
     async def run(
