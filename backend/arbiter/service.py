@@ -43,6 +43,7 @@ from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
 from .store import EventBus, Store
+from .threads import WARN_PCT, assess, parse_analyzer, parse_thread_list
 from .workspace import zephyr_base_for_run
 from .zephyr_shell import ShellCommands, normalize
 
@@ -1369,6 +1370,58 @@ class Arbiter:
             "did_you_mean": close,
             "hint": "Commands come from the ELF you flashed; see shell_commands for the list.",
         }
+
+    # ------------------------------------------------------------------ thread health
+    async def thread_health(
+        self, session_id: str | None, token: str, warn_pct: int = WARN_PCT, timeout_s: float = 10
+    ) -> dict[str, Any]:
+        """Stack use of every thread, from the kernel shell or the thread analyzer's report."""
+        _lease, rt = self._check(token, session_id)
+        out: dict[str, Any] = {"note": UNTRUSTED}
+        for cmd in self._thread_commands(rt):
+            res = await self.shell_exec(session_id, token, cmd, timeout_s)
+            if not res.get("prompt_seen"):
+                break  # no shell answering: the other spelling won't do better
+            if res.get("error"):
+                continue
+            threads, unknown = parse_thread_list(res["untrusted_device_output"])
+            if threads:
+                out.update(source=f"shell: {cmd}", threads=threads)
+                if unknown:
+                    out["hint"] = "Stack use is unknown: build with CONFIG_INIT_STACKS=y."
+                break
+        if "threads" not in out:
+            name = rt.hub.primary
+            start = rt.boot_mark.get(name, 0)
+            text = rt.hub.channels[name].since(start).decode(errors="replace")
+            threads = parse_analyzer(text)
+            if threads:
+                out.update(source="thread analyzer report on the console", threads=threads)
+            else:
+                out["threads"] = []
+                out["hint"] = (
+                    "No thread info. Either enable the kernel shell with stack info "
+                    "(CONFIG_SHELL=y, CONFIG_KERNEL_SHELL=y, CONFIG_THREAD_MONITOR=y, "
+                    "CONFIG_THREAD_STACK_INFO=y, CONFIG_INIT_STACKS=y), or the thread analyzer "
+                    "(CONFIG_THREAD_ANALYZER=y, CONFIG_THREAD_ANALYZER_AUTO=y). inspect_hung "
+                    "lists threads through the debugger instead."
+                )
+        warnings = assess(out["threads"], warn_pct)
+        if warnings:
+            out["warnings"] = warnings
+        out["ok"] = bool(out["threads"]) and not warnings
+        return out
+
+    @staticmethod
+    def _thread_commands(rt: BoardRuntime) -> list[str]:
+        """The image's thread list command, or both spellings when the image is unknown."""
+        cmds = {c["name"]: c for c in (rt.shell or {}).get("commands") or []}
+        if not cmds:
+            return ["kernel thread list", "kernel threads"]
+        subs = {s["name"]: s for s in cmds.get("kernel", {}).get("subcommands") or []}
+        if "list" in {s["name"] for s in subs.get("thread", {}).get("subcommands") or []}:
+            return ["kernel thread list"]
+        return ["kernel threads"] if "threads" in subs else []
 
     # ------------------------------------------------------------------ debugging (§9)
     async def _debug(

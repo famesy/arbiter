@@ -121,7 +121,7 @@ async def test_shell_suggestions_and_view(daemon, build_dir):
         await pilot.press("tab")
         assert app.input.value == "kernel "
         await pilot.press("tab", "tab")
-        assert app.input.value == "kernel uptime "
+        assert app.input.value == "kernel thread "
 
         await pilot.press("f7", "2")
         assert app.view["ts"] is True
