@@ -162,6 +162,15 @@ instead: flash a working image, then `arbiter release`. Exit codes: `0` OK, `75`
   diff and the commits and files in your repo). `history()` lists recent
   flashes and runs on each board.
 
+## Updating over MCUmgr (DFU)
+
+- To test the update path itself (MCUboot swap, image confirm, revert),
+  use `dfu(build_dir)` instead of `flash`: it uploads the signed image,
+  test-boots it and confirms it. `dfu(build_dir, confirm=false)` leaves it
+  unconfirmed so a reset reverts. `dfu_status()` shows the slots.
+- It needs MCUboot (`--sysbuild`), MCUmgr over UART in the running image
+  and `mcumgr` on the host. Use plain `flash` for everyday work.
+
 ## Stacks and threads
 
 - Odd resets, corrupted variables or a fault in a thread you didn't expect?

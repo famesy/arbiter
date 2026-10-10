@@ -27,6 +27,9 @@ from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, imag
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
 from .coredump import analyze, find_tools
 from .crash import REPEAT_WINDOW_S, Crash, CrashWatcher, image_info, symbolize
+from .dfu import find_update_image, parse_image_list
+from .dfu import slot as dfu_slot
+from .dfu import verdict as dfu_verdict
 from .dictlog import Tools as DictlogTools
 from .dictlog import decode as decode_dictlog
 from .dictlog import find_tools as dictlog_tools
@@ -41,7 +44,7 @@ from .logfilter import apply as log_filter
 from .nrf91 import FINAL_RX, STATUS_COMMANDS, check_at, convert_trace, response, summarize
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
-from .procs import IS_WINDOWS, kill_tree, run_proc
+from .procs import IS_WINDOWS, ProcResult, kill_tree, run_proc
 from .store import EventBus, Store
 from .threads import WARN_PCT, assess, parse_analyzer, parse_thread_list
 from .workspace import zephyr_base_for_run
@@ -763,6 +766,105 @@ class Arbiter:
             return res
 
         return await self._start_op(lease, rt, "flash", do, wait_s)
+
+    # ------------------------------------------------------------------ DFU over MCUmgr
+    async def dfu(
+        self,
+        session_id: str | None,
+        token: str,
+        build_dir: str,
+        confirm: bool = True,
+        wait_s: float = MAX_WAIT_S,
+        confirm_boot_s: float = 20.0,
+    ) -> dict[str, Any]:
+        """Update the board the way it is updated in the field: upload the signed image over
+        MCUmgr, test it, reset, wait for the boot banner, then confirm it (or not)."""
+        lease, rt = self._check(token, session_id)
+        self._need(rt, "dfu")
+        image = await asyncio.to_thread(find_update_image, Path(build_dir))
+        if image is None:
+            raise ArbiterError(
+                "BAD_REQUEST",
+                f"no signed image (zephyr.signed.bin / app_update.bin) in {build_dir}",
+                hint="DFU needs MCUboot: build with --sysbuild and SB_CONFIG_BOOTLOADER_MCUBOOT=y.",
+            )
+
+        async def do(op: Op) -> dict[str, Any]:
+            log_path = Path(op.log_path)
+            res: dict[str, Any] = {"image_file": str(image), "steps": []}
+
+            async def smp(*args: str, timeout_s: float = 60) -> ProcResult:
+                r = await rt.driver.smp(list(args), log_path=log_path, timeout_s=timeout_s)
+                res["steps"].append({"cmd": " ".join(args[:2]), "ok": r.ok})
+                if not r.ok:
+                    raise _DfuStepError(" ".join(args[:2]), r)
+                return r
+
+            who = self._who(lease.session_id)
+            rt.hub.annotate(f"[arbiter] {who} DFU over MCUmgr: {image.name}")
+            try:
+                await smp("image", "upload", str(image), timeout_s=600)
+                slots = parse_image_list("\n".join((await smp("image", "list")).tail))
+                new = dfu_slot(slots, 0, 1)
+                if new is None or not new.get("hash"):
+                    raise ArbiterError("OP_FAILED", "the upload left no image in slot 1")
+                await smp("image", "test", new["hash"])
+                self._mark(lease, rt)
+                await smp("reset")
+                boot = await await_boot(
+                    rt.hub, confirm_boot_s, self.marks.get(lease.token, {}), [rt.hub.primary]
+                )
+                res["boot_confirmed"] = boot["booted"]
+                if boot["booted"]:
+                    self.marks.setdefault(lease.token, {})[boot["channel"]] = boot["match_start"]
+                    await asyncio.sleep(0.5)  # let the app bring up its SMP transport
+                slots = parse_image_list("\n".join((await smp("image", "list")).tail))
+                state = dfu_verdict(slots, new["hash"])
+                if state["running_new_image"] and confirm and not state["confirmed"]:
+                    await smp("image", "confirm")
+                    slots = parse_image_list("\n".join((await smp("image", "list")).tail))
+                    state = dfu_verdict(slots, new["hash"])
+            except _DfuStepError as e:
+                res.update(ok=False, failed_step=e.step, tail=e.result.tail[-15:])
+                res["log_path"] = str(log_path)
+                res["hint"] = (
+                    "Is MCUmgr over UART in the running image (CONFIG_MCUMGR_TRANSPORT_UART or "
+                    "the shell transport, CONFIG_MCUMGR_GRP_IMG=y), and is mcumgr installed?"
+                )
+                rt.hub.annotate(f"[arbiter] DFU FAILED at {e.step}")
+                return res
+            res.update(state, slots=slots, ok=state["running_new_image"])
+            if not state["running_new_image"]:
+                res["warning"] = (
+                    "The board is not running the uploaded image: MCUboot rejected or reverted "
+                    "it. Check the console for the bootloader's messages."
+                )
+            elif not state["confirmed"]:
+                res["note"] = "Running in test mode: the next reset reverts to the old image."
+            if res["ok"]:
+                res["shell_commands"] = await self._read_shell(rt, Path(build_dir))
+                self._set_image(rt, Path(build_dir))
+            crash = self._crash_since(rt, self.marks.get(lease.token, {}))
+            if crash is not None:
+                res["crash"] = crash.brief()
+            await self._record_flash(rt, who, Path(build_dir), res)
+            rt.hub.annotate(f"[arbiter] DFU {'ok' if res['ok'] else 'FAILED'}")
+            return res
+
+        return await self._start_op(lease, rt, "dfu", do, wait_s)
+
+    async def dfu_status(self, session_id: str | None, token: str) -> dict[str, Any]:
+        """MCUboot's slots as the running image reports them over MCUmgr."""
+        lease, rt = self._check(token, session_id)
+        self._need(rt, "dfu")
+        if rt.op and rt.op.ended is None:
+            raise ArbiterError("BOARD_BUSY", f"{rt.op.kind} is running", op_id=rt.op.id)
+        r = await rt.driver.smp(
+            ["image", "list"], log_path=self._lease_dir(lease) / "mcumgr.log", timeout_s=20
+        )
+        if not r.ok:
+            return {"ok": False, "tail": r.tail[-10:]}
+        return {"ok": True, "slots": parse_image_list("\n".join(r.tail))}
 
     async def _read_shell(self, rt: BoardRuntime, build_dir: Path) -> int | None:
         """Record the flashed image's shell commands for console completion. Never fails
@@ -2349,6 +2451,12 @@ class Arbiter:
             "human": self.cfg.human_name,
         }
         return snap
+
+
+class _DfuStepError(Exception):
+    def __init__(self, step: str, result: ProcResult):
+        super().__init__(step)
+        self.step, self.result = step, result
 
 
 async def await_boot(

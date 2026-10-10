@@ -284,6 +284,31 @@ async def flash(
 
 
 @mcp.tool()
+async def dfu(
+    build_dir: str, confirm: bool = True, lease_token: str | None = None
+) -> dict[str, Any]:
+    """Update your board over MCUmgr like a device in the field: upload the build's signed image
+    (needs MCUboot), test it, reset, check it boots, then confirm it (confirm=false leaves it in test
+    mode, so the next reset reverts). Needs mcumgr and MCUmgr over UART in the running image.
+    May return status "running" with op_id: then call run_status(op_id)."""
+    return await shim.call(
+        "/api/dfu",
+        {
+            "lease_token": lease_token,
+            "build_dir": str(Path(_workdir()) / build_dir),
+            "confirm": confirm,
+        },
+        need_lease=True,
+    )
+
+
+@mcp.tool()
+async def dfu_status(lease_token: str | None = None) -> dict[str, Any]:
+    """MCUboot's image slots as the running image reports them: version, hash, active/confirmed/pending."""
+    return await shim.call("/api/dfu/status", {"lease_token": lease_token}, need_lease=True)
+
+
+@mcp.tool()
 async def reset(halt: bool = False, lease_token: str | None = None) -> dict[str, Any]:
     """Reset your board."""
     return await shim.call(

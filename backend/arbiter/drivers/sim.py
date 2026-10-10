@@ -13,6 +13,7 @@ build directory. Options under `[board.options]`:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from ..console.detect import detect_from_build
 from ..console.hub import ConsoleHub
 from ..console.sources import CallbackSource
 from ..errors import ArbiterError
+from ..procs import ProcResult
 from ..zephyr_shell import ShellCommand, ShellCommands
 from .base import BoardDriver, LineFn
 
@@ -31,7 +33,7 @@ PROMPT = "uart:~$ "
 class SimDriver(BoardDriver):
     kind = "sim"
     capabilities = frozenset(
-        {"flash", "reset", "halt", "recover", "console", "run", "power", "modem_trace"}
+        {"flash", "reset", "halt", "recover", "console", "run", "power", "modem_trace", "dfu"}
     )
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
@@ -49,6 +51,11 @@ class SimDriver(BoardDriver):
         self._hb_task: asyncio.Task[Any] | None = None
         self._trace_task: asyncio.Task[Any] | None = None
         self.health = "ok"
+        # MCUboot slots for simulated MCUmgr: image 0, slot 0 runs, slot 1 takes uploads.
+        self.slots: list[dict[str, Any] | None] = [
+            {"version": "1.0.0", "hash": "a0" * 32, "flags": ["active", "confirmed"]},
+            None,
+        ]
 
     def _d(self, s: float) -> float:
         return s / self.speed
@@ -265,6 +272,56 @@ class SimDriver(BoardDriver):
             return {"ok": True, "halted": True}
         self._boot()
         return {"ok": True, "halted": False}
+
+    async def smp(self, args: list[str], *, log_path: Path, timeout_s: float = 60) -> ProcResult:
+        """Simulated `mcumgr`: upload, list, test, confirm and reset with MCUboot's swap."""
+        t0 = time.monotonic()
+        out: list[str] = []
+        code = 0
+        s0, s1 = self.slots
+        match args:
+            case ["image", "upload", path]:
+                data = await asyncio.to_thread(Path(path).read_bytes)
+                await asyncio.sleep(self._d(0.3))
+                self.slots[1] = {
+                    "version": "1.1.0",
+                    "hash": hashlib.sha256(data).hexdigest(),
+                    "flags": [],
+                }
+                out = [f"{len(data)} / {len(data)} [=====] 100.00%", "Done"]
+            case ["image", "list"]:
+                out = ["Images:"]
+                for i, s in enumerate(self.slots):
+                    if s is not None:
+                        out += [
+                            f" image=0 slot={i}",
+                            f"    version: {s['version']}",
+                            "    bootable: true",
+                            f"    flags: {' '.join(s['flags'])}",
+                            f"    hash: {s['hash']}",
+                        ]
+                out.append("Split status: N/A (0)")
+            case ["image", "test", h] if s1 is not None and s1["hash"] == h:
+                s1["flags"] = ["pending"]
+            case ["image", "confirm", *h] if s0 is not None and h in ([], [s0["hash"]]):
+                s0["flags"] = ["active", "confirmed"]
+                if s1 is not None:
+                    s1["flags"] = []
+            case ["reset"]:
+                if s1 is not None and "pending" in s1["flags"] and s0 is not None:
+                    s1["flags"], s0["flags"] = ["active"], ["confirmed"]
+                    self.slots = [s1, s0]
+                elif s0 is not None and "confirmed" not in s0["flags"] and s1 is not None:
+                    s1["flags"], s0["flags"] = ["active", "confirmed"], []  # MCUboot reverts
+                    self.slots = [s1, s0]
+                self._out("\r\n")
+                self._boot()
+            case _:
+                code, out = 1, [f"Error: simulated mcumgr cannot do {' '.join(args)}"]
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a") as f:
+            f.write("\n".join(out) + "\n")
+        return ProcResult(["mcumgr", *args], code, time.monotonic() - t0, out, str(log_path))
 
     async def recover(self, *, log_path: Path) -> dict[str, Any]:
         await asyncio.sleep(self._d(0.5))
