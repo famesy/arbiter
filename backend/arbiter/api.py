@@ -397,7 +397,16 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             bool(body.get("allow_debug_attached", False)),
             bool(body.get("power_cycle", False)),
             float(body.get("wait_s", 45)),
+            body.get("save_baseline"),
+            body.get("baseline"),
+            float(body.get("tolerance_pct", 10)),
+            body.get("max_avg_ua"),
+            body.get("max_peak_ua"),
+            body.get("max_charge_uc"),
         )
+
+    async def power_baselines(ctx: Ctx, body: Body) -> Any:
+        return arb.power_baselines(ctx["query"].get("board") or None)
 
     # ------------------------------------------------------------ admin routes
     async def board_action(ctx: Ctx, body: Body) -> Any:
@@ -634,6 +643,7 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/console/shell", a(console_shell), methods=["POST"]),
         Route("/api/gdb/start", a(gdb_start), methods=["POST"]),
         Route("/api/threads", a(thread_health), methods=["POST"]),
+        Route("/api/power/baselines", a(power_baselines), methods=["GET"]),
         Route("/api/dfu", a(dfu), methods=["POST"]),
         Route("/api/dfu/status", a(dfu_status), methods=["POST"]),
         Route("/api/image-info", a(image_info), methods=["POST"]),

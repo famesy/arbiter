@@ -22,6 +22,8 @@ from typing import Any, TypeVar
 
 from . import config_edit as ce
 from . import scheduler as sch
+from .baselines import Baselines, check_limits
+from .baselines import compare as compare_baseline
 from .config import BoardConfig, Config, config_from_dict, load_toolchain_env
 from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, image_dirs
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
@@ -38,7 +40,7 @@ from .drivers.base import BoardDriver
 from .errors import ArbiterError
 from .gdb import DebugSession
 from .history import History, compare, named_tests
-from .imageinfo import describe_build, fingerprint, git_state
+from .imageinfo import describe_build, file_hash, fingerprint, git_state
 from .logfilter import LogFilter
 from .logfilter import apply as log_filter
 from .nrf91 import FINAL_RX, STATUS_COMMANDS, check_at, convert_trace, response, summarize
@@ -185,6 +187,7 @@ class Arbiter:
         self._config_lock = asyncio.Lock()
         self.restart_needed: set[str] = set()  # settings saved but not yet in effect
         self.history = History(None, cfg.state)
+        self.baselines = Baselines(None)
 
     # =================================================================== lifecycle
     async def start(self, persist: bool = True) -> None:
@@ -198,6 +201,7 @@ class Arbiter:
         if self.store:
             self._kill_orphans()
             self.history = History(self.store, self.cfg.state)
+            self.baselines = Baselines(self.store)
             data = self.store.get("scheduler")
             if data:
                 self.sched.restore(data)
@@ -2010,10 +2014,25 @@ class Arbiter:
         allow_debug_attached: bool = False,
         power_cycle: bool = False,
         wait_s: float = MAX_WAIT_S,
+        save_baseline: str | None = None,
+        baseline: str | None = None,
+        tolerance_pct: float = 10.0,
+        max_avg_ua: float | None = None,
+        max_peak_ua: float | None = None,
+        max_charge_uc: float | None = None,
     ) -> dict[str, Any]:
         lease, rt = self._check(token, session_id)
         p = self._power(rt, "measure")
         duration_ms = int(max(10, min(duration_ms, 120_000)))
+        if baseline and self.baselines.get(rt.cfg.id, baseline) is None:
+            known = sorted(self.baselines.list(rt.cfg.id)[rt.cfg.id])
+            raise ArbiterError(
+                "BAD_REQUEST",
+                f"no baseline {baseline!r} on {rt.cfg.id}",
+                hint=f"Known: {', '.join(known) or 'none'}. Save one with save_baseline.",
+            )
+        limits = {"max_avg_ua": max_avg_ua, "max_peak_ua": max_peak_ua}
+        limits["max_charge_uc"] = max_charge_uc
 
         async def do(op: Op) -> dict[str, Any]:
             detached: list[str] = []
@@ -2062,6 +2081,20 @@ class Arbiter:
                 if tripped:
                     out["tripped"] = True
                     out["warning"] = f"{tripped}. Power is off until the human turns it back on."
+                await self._judge_power(
+                    rt,
+                    out,
+                    res.valid,
+                    limits,
+                    baseline,
+                    tolerance_pct,
+                    {
+                        "duration_ms": duration_ms,
+                        "trigger": trigger,
+                        "power_cycle": power_cycle,
+                    },
+                    save_baseline,
+                )
                 self.bus.publish("power.measured", {"board": rt.cfg.id, "measurement": out})
                 return out
             finally:
@@ -2069,6 +2102,44 @@ class Arbiter:
                     await rt.driver.reattach_debug(detached)
 
         return await self._start_op(lease, rt, "measure", do, wait_s)
+
+    async def _judge_power(
+        self,
+        rt: BoardRuntime,
+        out: dict[str, Any],
+        valid: bool,
+        limits: dict[str, float | None],
+        baseline: str | None,
+        tolerance_pct: float,
+        how: dict[str, Any],
+        save_as: str | None,
+    ) -> None:
+        """Limits, baseline comparison and saving, added to a measurement's result."""
+        if rt.image and rt.image.get("elf"):
+            how["elf_sha"] = await asyncio.to_thread(file_hash, Path(rt.image["elf"]))
+        checks = check_limits(out, limits)
+        if checks:
+            out["checks"] = checks
+        if baseline:
+            base = self.baselines.get(rt.cfg.id, baseline)
+            assert base is not None
+            out["baseline"] = {"name": baseline, **compare_baseline(out, base, tolerance_pct, how)}
+        if checks or baseline:
+            out["passed"] = (
+                valid and all(c["ok"] for c in checks) and (not baseline or out["baseline"]["ok"])
+            )
+        if save_as:
+            if not valid:
+                out["baseline_saved"] = False
+                out["warning"] = (out.get("warning") or "") + " Not saved as a baseline."
+            else:
+                self.baselines.save(rt.cfg.id, save_as, out, how)
+                out["baseline_saved"] = save_as
+
+    def power_baselines(self, board: str | None = None) -> dict[str, Any]:
+        if board:
+            self.rt(board)
+        return {"baselines": self.baselines.list(board)}
 
     # ------------------------------------------------------------------ console detection
     async def detect_console(

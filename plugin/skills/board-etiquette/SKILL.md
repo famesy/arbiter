@@ -227,3 +227,9 @@ cycles the board. `measure_current(duration_ms=5000, trigger="after_boot")`
 returns a summary (avg, min, max, peak µA, charge µC) and a trace file path,
 never raw samples. RTT is detached automatically while measuring, so it does
 not skew the numbers.
+
+To catch power regressions, save a baseline once with
+`measure_current(duration_ms=10000, trigger="after_boot", save_baseline="idle")`,
+then measure the same way with `baseline="idle"` after each change: `passed`
+is false when the average or charge rose more than 10 % (`tolerance_pct`).
+`max_avg_ua=...` is a plain limit. `current_baselines()` lists what is saved.
