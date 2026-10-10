@@ -83,6 +83,15 @@ platform = "native_sim"
 uart = "stdio"                   # stdio | pty
 autostart = false
 
+# ------------------------------------------------------- QEMU / Renode board
+# "flash" starts the build's emulator target (cmake --build <build> --target run).
+# [[board]]
+# id = "qemu-m3"
+# driver = "qemu"                # or "renode" (target run_renode)
+# platform = "qemu_cortex_m3"
+# [board.options]
+# autostart = false
+
 # ---------------------------------------------------------- simulated board
 # Needs no hardware. Useful to try the queue, the dashboard and agent setup.
 [[board]]

@@ -25,6 +25,9 @@ class BoardDriver:
     #: what the driver can do: flash, reset, halt, recover, console, rtt, run, power
     capabilities: frozenset[str] = frozenset()
     default_runner = "jlink"  # twister's runner when the board doesn't name one
+    #: the board is a local process (native_sim, QEMU, Renode): its UART is a pty that wants
+    #: "\n" line ends, power is the process, and tests reach it without a hardware map
+    is_process = False
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
         self.cfg = cfg
