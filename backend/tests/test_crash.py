@@ -146,6 +146,22 @@ async def test_quiet_timer_ends_a_block():
     assert len(got) == 1 and got[0].ended_by == "quiet"
 
 
+async def test_a_pause_inside_a_coredump_does_not_end_the_block(monkeypatch):
+    """On the nRF9161 DK a deferred-logging coredump arrives in bursts; the block must
+    stay open until #CD:END# instead of closing on the first pause."""
+    monkeypatch.setattr(cr, "COREDUMP_QUIET_S", 0.3)
+    got: list[Crash] = []
+    w = CrashWatcher("b", got.append, quiet_s=0.05)
+    w.feed("uart:app", b"<err> os: ***** USAGE FAULT *****\n", None)
+    w.feed("uart:app", b"<err> coredump: #CD:BEGIN#\n<err> coredump: #CD:5a45\n", None)
+    await asyncio.sleep(0.15)  # longer than quiet_s
+    assert not got
+    w.feed("uart:app", b"<err> coredump: #CD:0100\n<err> coredump: #CD:END#\n", None)
+    await asyncio.sleep(0.15)
+    assert len(got) == 1
+    assert got[0].coredump == ["#CD:BEGIN#", "#CD:5a45", "#CD:0100", "#CD:END#"]
+
+
 def test_function_at_uses_symbol_sizes():
     elf = Elf.load(DATA / "shell_arm.elf")
     assert elf.function_at(0x202C6) == ("dyn_get", 6)

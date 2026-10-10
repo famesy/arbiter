@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import os
+import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -29,6 +32,37 @@ from ..procs import ProcResult, run_proc, start_detached, which
 from ..workspace import west_context
 from . import discovery
 from .base import BoardDriver, LineFn
+
+
+def jlink_gdbserver(configured: str | None = None) -> str | None:
+    """SEGGER's command-line GDB server when `JLinkGDBServer` isn't on PATH: the configured
+    path, the J-Link install the registry names, or the newest one under Program Files.
+    None when PATH already has it (the runner's default works) or nothing is found."""
+    if configured:
+        return configured
+    if shutil.which("JLinkGDBServer") or sys.platform != "win32":
+        return None
+    dirs: list[str] = []
+    try:
+        import winreg
+
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(hive, r"Software\SEGGER\J-Link") as key:
+                    dirs.append(str(winreg.QueryValueEx(key, "InstallPath")[0]))
+            except OSError:
+                pass
+    except ImportError:
+        pass
+    for var in ("PROGRAMFILES", "PROGRAMFILES(X86)"):
+        if root := os.environ.get(var):
+            dirs += sorted(map(str, (Path(root) / "SEGGER").glob("JLink*")), reverse=True)
+    for d in dirs:
+        exe = Path(d) / "JLinkGDBServerCL.exe"
+        if exe.exists():
+            return str(exe)
+    return None
+
 
 JLINK_DEVICES = {
     "nrf9161dk": "nRF9161_xxCA",
@@ -217,8 +251,13 @@ class WestDriver(BoardDriver):
         ]
         if self.cfg.options.get("debug_runner"):
             argv += ["-r", str(self.cfg.options["debug_runner"])]
+        argv += self.debugserver_args()
         env, run_in = west_context(build_dir, self.cfg.zephyr_base, build_dir.parent)
         return await start_detached(argv, cwd=run_in, env=env, log_path=log_path)
+
+    def debugserver_args(self) -> list[str]:
+        """Extra `west debugserver` arguments for this board's debug runner."""
+        return []
 
     def run_env(self) -> dict[str, str]:
         env = super().run_env()
@@ -249,6 +288,14 @@ class NrfDriver(WestDriver):
         super().__init__(cfg, hub, state_dir)
         self._vcoms: dict[int, str] = {}  # VCOM index -> port, from `nrfutil device list`
         self._vcoms_at = 0.0
+
+    def debugserver_args(self) -> list[str]:
+        # Zephyr's jlink runner finds JLink.exe through the registry but looks for the
+        # GDB server on PATH only, and SEGGER's Windows installer doesn't add it there.
+        if self.cfg.options.get("debug_runner") not in (None, "jlink"):
+            return []
+        server = jlink_gdbserver(self.cfg.tools.get("jlink_gdbserver"))
+        return ["--gdbserver", server] if server else []
 
     async def start(self) -> None:
         await self.refresh_vcoms()

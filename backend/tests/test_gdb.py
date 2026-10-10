@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from arbiter.errors import ArbiterError
-from arbiter.gdb import _cstring, check_command, mi_field, mi_unquote
+from arbiter.gdb import DebugSession, _cstring, check_command, mi_field, mi_unquote
 
 from .test_service import done, lease_for
 
@@ -149,3 +149,51 @@ async def test_gdb_on_a_board_without_debugger(arb):
     with pytest.raises(ArbiterError) as e:
         await arb.gdb_start(s, tok)
     assert e.value.code == "NOT_SUPPORTED"
+
+
+class _RecordingGdb:
+    running = False
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def cli(self, cmd: str, timeout_s: float = 0) -> None:
+        self.sent.append(cmd)
+        if cmd == "monitor go":
+            raise RuntimeError("OpenOCD: invalid command name")  # must not stop the detach
+
+    async def mi(self, cmd: str, timeout_s: float = 0) -> None:
+        self.sent.append(cmd)
+
+    async def close(self) -> None:
+        self.sent.append("exit")
+
+
+async def test_close_runs_the_target_before_detaching():
+    """J-Link's GDB server keeps the core halted after a plain detach."""
+    gdb = _RecordingGdb()
+    server = await asyncio.create_subprocess_exec(sys.executable, "-c", "pass")
+    await server.wait()
+    sess = DebugSession("b", Path("x.elf"), server, gdb, 0)  # type: ignore[arg-type]
+    await sess.close(resume=True)
+    assert gdb.sent == ["monitor go", "-target-detach", "exit"]
+    gdb.sent.clear()
+    await sess.close(resume=False)
+    assert gdb.sent == ["exit"]
+
+
+def test_jlink_gdbserver_lookup(monkeypatch, tmp_path):
+    from arbiter.drivers import west
+
+    assert west.jlink_gdbserver("C:/J/JLinkGDBServerCL.exe") == "C:/J/JLinkGDBServerCL.exe"
+    monkeypatch.setattr(west.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(west.sys, "platform", "linux")
+    assert west.jlink_gdbserver() is None  # PATH is the runner's business off Windows
+    monkeypatch.setattr(west.sys, "platform", "win32")
+    exe = tmp_path / "SEGGER" / "JLink_V982" / "JLinkGDBServerCL.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+    monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
+    found = west.jlink_gdbserver()
+    assert found is not None and found.endswith("JLinkGDBServerCL.exe")

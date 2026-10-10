@@ -142,6 +142,27 @@ async def test_heartbeat_loss_grace_and_reclaim(clock):
     assert s.boards["b1"].state == sch.AVAILABLE
 
 
+async def test_restarted_agent_gets_its_board_back(clock):
+    """The MCP server exits (session ended, lease in grace) and the same agent starts a
+    new one: it is the same session again and keeps its lease instead of queueing."""
+    s = make(clock)
+    a = s.register_session("claude", "A", external_id="ext-A", heartbeat=True).id
+    tok = granted(s.acquire(a, "b1"))
+    s.end_session(a, release=False)
+    assert s.leases[tok].state == sch.EXPIRING
+    clock.advance(5)
+    again = s.register_session("claude", "A", external_id="ext-A", heartbeat=True)
+    assert again.id == a and not again.ended
+    assert s.leases[tok].state == sch.ACTIVE and s.boards["b1"].state == sch.LEASED
+
+
+async def test_ended_session_without_lease_is_not_reused(clock):
+    s = make(clock)
+    a = s.register_session("claude", "A", external_id="ext-A").id
+    s.end_session(a)
+    assert s.register_session("claude", "A", external_id="ext-A").id != a
+
+
 async def test_ttl_expiry_and_extend(clock):
     s = make(clock)
     tok = granted(s.acquire(agent(s, "A"), "b1"))

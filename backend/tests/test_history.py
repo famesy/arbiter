@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from arbiter.history import named_tests
-from arbiter.imageinfo import describe_build, parse_partitions
+from arbiter.imageinfo import describe_build, parse_dts_partitions, parse_partitions
 
 from .test_service import done, lease_for
 
@@ -26,6 +26,47 @@ mcuboot:
     - mcuboot_primary
   region: flash_primary
   size: 0x8000
+"""
+
+# Trimmed from an NCS v3.4.1 nrf9161dk/nrf9161/ns build (no Partition Manager).
+DTS = """/ {
+	chosen {
+		zephyr,code-partition = &slot0_ns_partition; /* in nrf9161dk_nrf9161_ns.dts:15 */
+	};
+	soc {
+		flash-controller@40039000 {
+			flash0: flash@0 {
+				reg = < 0x0 0x100000 >;
+				partitions {
+					ranges;
+					boot_partition: partition@0 {
+						label = "mcuboot";
+						reg = < 0x0 0x10000 >; /* in nrf91xx_partition.dtsi:35 */
+					};
+
+					/* node '/soc/flash-controller@40039000/flash@0/partitions/partition@10000' */
+					slot0_partition: partition@10000 {
+						label = "image-0";
+						reg = < 0x10000 0x70000 >;
+						ranges = < 0x0 0x10000 0x70000 >;
+						slot0_s_partition: partition@0 {
+							label = "image-0-secure";
+							reg = < 0x0 0x40000 >;
+						};
+						slot0_ns_partition: partition@40000 {
+							label = "image-0-nonsecure";
+							reg = < 0x40000 0x30000 >;
+						};
+					};
+					storage_partition: partition@f8000 {
+						label = "storage";
+						reg = < 0xf8000 0x8000 >;
+					};
+				};
+			};
+		};
+	};
+};
 """
 
 
@@ -119,3 +160,37 @@ async def test_test_runs_are_recorded(arb, tmp_path):
     good = await arb.last_good(test="tests/smoke")
     assert good["found"] and good["entry"]["tests"] == ["tests/smoke"]
     assert (await arb.last_good(test="tests/other"))["found"] is False
+
+
+def test_dts_partitions_parser(tmp_path):
+    f = tmp_path / "zephyr.dts"
+    f.write_text(DTS)
+    parts, code = parse_dts_partitions(f)
+    assert code == "slot0_ns_partition"
+    by_name = {p["name"]: p for p in parts}
+    assert list(by_name) == [
+        "boot_partition",
+        "slot0_partition",
+        "slot0_s_partition",
+        "slot0_ns_partition",
+        "storage_partition",
+    ]
+    assert by_name["slot0_ns_partition"] == {
+        "name": "slot0_ns_partition",
+        "label": "image-0-nonsecure",
+        "address": "0x50000",  # nested: offset by slot0_partition at 0x10000
+        "size": 0x30000,
+    }
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="needs git")
+def test_describe_build_uses_dts_partitions(app):
+    """NCS v3.x without Partition Manager: the layout and the slot size come from zephyr.dts."""
+    _src, build = app
+    (build / "partitions.yml").unlink()
+    (build / "zephyr" / "zephyr.dts").write_text(DTS)
+    info = describe_build(build)
+    assert "slot0_ns_partition" in [p["name"] for p in info["partitions"]]
+    mem = info["memory"]
+    assert mem["code_partition"] == "slot0_ns_partition" and mem["code_partition_kib"] == 192
+    assert mem["flash_used_pct"] == round(100 * 534 / 0x30000, 1)

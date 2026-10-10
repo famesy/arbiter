@@ -11,7 +11,14 @@ from typing import Any
 import pytest
 from arbiter.config import BoardConfig
 from arbiter.service import Arbiter
-from arbiter.zephyr_shell import ShellCommand, from_build, from_elf, normalize
+from arbiter.zephyr_shell import (
+    STRUCTURED_HELP_MAGIC,
+    ShellCommand,
+    _Reader,
+    from_build,
+    from_elf,
+    normalize,
+)
 
 from .conftest import make_config
 from .test_detect_and_hooks import write_elf32
@@ -166,3 +173,47 @@ async def test_sim_board_offers_its_own_shell(arb, build_dir):
     assert res["shell_commands"] == 15
     names = [c["name"] for c in arb.shell_commands("sim-1")["commands"]]
     assert names == ["at", "device", "help", "kernel", "sim", "test"]
+
+
+class _MemElf:
+    """Just enough of Elf for _Reader.help: a little-endian 32-bit memory image."""
+
+    ptr_size, end, is64, machine = 4, "<", False, 40
+
+    def __init__(self, mem: dict[int, bytes]):
+        self.mem = mem
+
+    def read(self, addr: int, size: int) -> bytes:
+        for base, data in self.mem.items():
+            if base <= addr < base + len(data):
+                return data[addr - base : addr - base + size]
+        raise AssertionError(hex(addr))
+
+    def ptr(self, addr: int) -> int:
+        return int.from_bytes(self.read(addr, 4), "little")
+
+    def cstr(self, addr: int, limit: int = 4096) -> str:
+        data = self.read(addr, limit)
+        return data[: data.index(0)].decode()
+
+    def symbol(self, name: str) -> None:
+        return None
+
+
+def test_structured_help():
+    """Zephyr 4.x SHELL_HELP(desc, usage) points help at {magic, desc, usage}, as
+    `device list` does in NCS v3.4.1."""
+    struct_at, desc_at, usage_at, plain_at = 0x100, 0x200, 0x300, 0x400
+    elf = _MemElf(
+        {
+            struct_at: STRUCTURED_HELP_MAGIC.to_bytes(4, "little")
+            + desc_at.to_bytes(4, "little")
+            + usage_at.to_bytes(4, "little"),
+            desc_at: b"List configured devices\0",
+            usage_at: b"[<device filter>]\0",
+            plain_at: b"Clear screen.\0",
+        }
+    )
+    r = _Reader(elf)  # type: ignore[arg-type]
+    assert r.help(struct_at) == ("List configured devices", "[<device filter>]")
+    assert r.help(plain_at) == ("Clear screen.", None)

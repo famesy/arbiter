@@ -8,6 +8,7 @@ which Zephyr it was made with, in CMakeCache.txt."""
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from .console.detect import image_dirs
@@ -24,6 +25,19 @@ def cache_value(cache: Path, key: str) -> str | None:
         if line.startswith(prefix) and "=" in line:
             return line.split("=", 1)[1].strip() or None
     return None
+
+
+def build_python(image_dir: Path, build_dir: Path) -> list[str]:
+    """The Python the build used, to run Zephyr's scripts. CMake records it as
+    Python3_EXECUTABLE, or only as the internal _Python3_EXECUTABLE (NCS v3.4.1). Without
+    one, arbiter's own Python with -E: an NCS toolchain environment.json sets PYTHONPATH to
+    the bundle's standard library, which crashes a different Python build on Windows."""
+    for cache in (Path(image_dir) / "CMakeCache.txt", Path(build_dir) / "CMakeCache.txt"):
+        for key in ("Python3_EXECUTABLE", "_Python3_EXECUTABLE"):
+            py = cache_value(cache, key)
+            if py and Path(py).exists():
+                return [py]
+    return [sys.executable, "-E"]
 
 
 def zephyr_base_from_build(build_dir: Path) -> Path | None:
