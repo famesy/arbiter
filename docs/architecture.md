@@ -158,6 +158,7 @@ The names match the prototype (`acquire_board`, `release_board`, `serial_expect`
 | `reset(lease_token, halt?)` | Resets the board. |
 | `console_read(lease_token, channel?, cursor?, max_bytes)` | Reads from a channel's ring buffer by cursor. `channel` is one name, a list, or `"all"` (see [§7](#several-channels-at-once)). The default is the board's primary channel. |
 | `serial_expect(lease_token, regex, channel?, timeout_s≤45)` | The daemon matches the regex itself, so the agent doesn't burn tokens polling. Returns the match, the channel it came from, and context. `channel` works as in `console_read`; `"any"` matches on whichever channel prints it first. |
+| `shell_exec(lease_token, cmd, timeout_s?, channel?)` | Runs one Zephyr shell command: writes the line, waits for the next prompt (`uart:~$ `, `rtt:~$ `, or the board option `shell_prompt`), and returns only the output, without echo, VT100 codes or arbiter's own notes. A root command that the flashed ELF doesn't have is refused before anything is sent, with `did_you_mean`. On a timeout after a crash it returns the crash. |
 | `serial_write(lease_token, data, channel?)` | Logged as `[agent:<session>]`. Sends to the primary channel unless `channel` names another writable one (a UART, or an RTT down-channel). |
 | `run(lease_token, cmd[], cwd, timeout_s, detach?)` | Runs twister, pytest or a script with the board injected (see [§8](#8-integration-tests)). Returns a bounded summary: the last N lines, the junit verdict and the full log path. With `detach`, it returns a run ID instead. |
 | `run_status(run_id, wait_s≤45)` | Checks on a detached run. |
@@ -373,6 +374,8 @@ The problem: twister and pytest want to open the serial port and the probe thems
    - This also works for RTT consoles, because the bridge reads from the hub regardless of source.
 2. **`arbiter run -- <any cmd>` from the shell.** It does the same thing for arbitrary scripts. It exports `ARBITER_BOARD`, `ARBITER_DEV_ID` and `ARBITER_PTY`.
 3. **Quick checks**: `flash` + `reset` + `serial_expect("PROJECT EXECUTION SUCCESSFUL", 30)`.
+
+**Board wiring in the hardware map.** A board's `fixtures = ["gpio_loopback", ...]`, `runner_params = [...]` and a `[board.twister]` table (`flash_timeout`, `pre_script`, `post_script`, `post_flash_script`, `flash_with_test`, `flash_before`, `run_with_fixture_only`, `base_params`, `notes`, `serial_baud`, checked against Zephyr's hwmap schema at load time) go into the map arbiter writes. Twister then only runs `harness_config: fixture:` tests on boards that have the wiring. Fixtures also count as tags, so `acquire_board({"platform": "nrf9161dk", "fixtures": ["gpio_loopback"]})` picks a board that has it.
 
 While a test runs, `op_in_progress=test` blocks other flash and gdb calls on that lease.
 

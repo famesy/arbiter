@@ -61,7 +61,7 @@ wait_for_board(ticket)                          # only if queued
 flash(build_dir="/abs/path/to/build")           # may return op_id -> run_status(op_id)
 serial_expect(regex="Booting nRF Connect SDK", timeout_s=20)
 console_read()                                  # what printed since your last read
-serial_write(data="kernel version")             # a shell command on the board
+shell_exec(cmd="kernel version")                # a shell command, returns its output
 release_board()
 ```
 
@@ -72,6 +72,12 @@ release_board()
   really boots; it reports this in its result.
 - Long operations (`flash`, `run`, `recover_board`, `measure_current`) may
   return `status: "running"` with an `op_id`. Poll `run_status(op_id)`.
+- For Zephyr shell commands use `shell_exec`: it waits for the prompt and
+  returns only the command's output. Use `serial_write` for raw input
+  (non-shell consoles, partial lines).
+- Some tests need wiring (a loopback, a SIM card). Boards list it as
+  `fixtures`; ask for one with `acquire_board(selector={"platform":
+  "nrf9161dk", "fixtures": ["gpio_loopback"]})`.
 - `serial_expect` searches from your last flash, reset or match by default
   (`since="mark"`), so a boot banner that already printed still counts. Use
   `since="now"` for new output only.

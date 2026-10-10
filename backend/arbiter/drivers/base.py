@@ -114,6 +114,11 @@ class BoardDriver:
         elif serial:
             entry["serial"] = serial
             entry["baud"] = self.cfg.ports[0].baud if self.cfg.ports else 115200
+        if self.cfg.runner_params:
+            entry["runner_params"] = list(self.cfg.runner_params)
+        if self.cfg.fixtures:
+            entry["fixtures"] = list(self.cfg.fixtures)
+        entry.update(self.cfg.twister)
         return entry
 
     def describe(self) -> dict[str, Any]:

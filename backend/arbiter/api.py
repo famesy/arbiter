@@ -265,6 +265,15 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             body.get("channel"),
         )
 
+    async def console_shell(ctx: Ctx, body: Body) -> Any:
+        return await arb.shell_exec(
+            sid(ctx),
+            body["lease_token"],
+            body["cmd"],
+            float(body.get("timeout_s", 10)),
+            body.get("channel"),
+        )
+
     async def console_detect(ctx: Ctx, body: Body) -> Any:
         return await arb.detect_console(
             sid(ctx), body["lease_token"], body.get("build_dir"), body.get("elf")
@@ -543,6 +552,7 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/console/expect", a(console_expect), methods=["POST"]),
         Route("/api/console/write", a(console_write), methods=["POST"]),
         Route("/api/console/detect", a(console_detect), methods=["POST"]),
+        Route("/api/console/shell", a(console_shell), methods=["POST"]),
         Route("/api/run", a(run), methods=["POST"]),
         Route("/api/ops/{op}", a(op_status), methods=["GET"]),
         Route("/api/power", a(power), methods=["POST"]),

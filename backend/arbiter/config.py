@@ -85,6 +85,11 @@ class BoardConfig:
     zephyr_base: str | None = None
     flash_args: list[str] = field(default_factory=list)
     tools: dict[str, str] = field(default_factory=dict)  # tool name -> path override
+    # Twister hardware map extras (design doc §8). `fixtures` names the wiring this board
+    # has (testcase.yaml `harness_config: fixture:`); they also count as tags for selectors.
+    fixtures: list[str] = field(default_factory=list)
+    runner_params: list[str] = field(default_factory=list)
+    twister: dict[str, Any] = field(default_factory=dict)  # see TWISTER_KEYS
     # Driver-specific options (sim, native_sim, plugins)
     options: dict[str, Any] = field(default_factory=dict)
     # Per-action command overrides, see plugins.py
@@ -113,6 +118,21 @@ class Config:
 
 
 _T = TypeVar("_T", bound="DataclassInstance")
+
+
+# Extra keys a board may add to its twister hardware map entry (Zephyr's hwmap schema).
+TWISTER_KEYS = {
+    "base_params",
+    "notes",
+    "pre_script",
+    "post_script",
+    "post_flash_script",
+    "flash_timeout",
+    "flash_with_test",
+    "flash_before",
+    "run_with_fixture_only",
+    "serial_baud",
+}
 
 
 def _mk(cls: type[_T], d: dict[str, Any]) -> _T:
@@ -163,6 +183,12 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         bc = _mk(BoardConfig, b)
         bc.ports, bc.power = ports, power
         bc.zephyr_base = bc.zephyr_base or cfg.zephyr_base
+        bad = set(bc.twister) - TWISTER_KEYS
+        if bad:
+            raise ValueError(
+                f"board {bc.id}: unknown [board.twister] keys {sorted(bad)}; "
+                f"allowed: {sorted(TWISTER_KEYS)}"
+            )
         _check_power_limits(bc.id, power)
         cfg.boards.append(bc)
     ids = [b.id for b in cfg.boards]
