@@ -1,7 +1,7 @@
 """A simulated Zephyr board, so the whole system runs and tests without hardware.
 
 It boots with a Zephyr-style banner, answers a small shell (`help`, `kernel
-uptime`, `test`, `sim fault`, `sim assert`, `sim sleep`, ...), and "flashes" any existing
+uptime`, `test`, `sim fault`, `sim assert`, `sim coredump`, `sim sleep`, ...), and "flashes" any existing
 build directory. Options under `[board.options]`:
 
     speed = 1.0          # >1 makes delays shorter (tests use 50)
@@ -141,6 +141,19 @@ class SimDriver(BoardDriver):
                 f"[{_ts(up)}] <err> fatal_error: Resetting system\r\n"
             )
             self._boot()
+        elif line == "sim coredump":
+            t = f"[{_ts(up)}] <err> os:"
+            self._out(
+                f"{t} ***** HARD FAULT *****\r\n"
+                f"{t} Faulting instruction address (r15/pc): 0x0000a3f2\r\n"
+                f"{t} >>> ZEPHYR FATAL ERROR 0: CPU exception on CPU 0\r\n"
+                f"{t} Current thread: 0x20000c08 (main)\r\n"
+                f"{t} Halting system\r\n"
+                f"{t} #CD:BEGIN#\r\n"
+                f"{t} #CD:5a4501000300050000000000\r\n"
+                f"{t} #CD:END#\r\n"
+            )
+            self.halted = True
         elif line == "sim assert":
             self._out(
                 "ASSERTION FAIL [buf != NULL] @ WEST_TOPDIR/app/src/main.c:42\r\n"
@@ -178,6 +191,7 @@ class SimDriver(BoardDriver):
                     1,
                     subcommands=[
                         c("assert", "Fail an assert and halt", 1),
+                        c("coredump", "Hard fault with a coredump, then halt", 1),
                         c("fault", "Bus fault, then reset", 1),
                         c("sleep", "Log entering sleep", 1),
                     ],
