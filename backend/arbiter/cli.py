@@ -537,6 +537,42 @@ def cmd_shell(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_crash(args: argparse.Namespace) -> int:
+    """The last crash seen on a board, symbolised."""
+    c = Client()
+    board = args.board
+    if not board:
+        boards = c.get("/api/boards")["boards"]
+        if len(boards) != 1:
+            print("give a board: " + ", ".join(b["id"] for b in boards), file=sys.stderr)
+            return 2
+        board = boards[0]["id"]
+    info = c.get(f"/api/boards/{board}/crash", history="1" if args.history else "")
+    if args.json:
+        _print(info, True)
+        return 0
+    crash = info.get("crash")
+    if not crash:
+        print(info.get("hint") or "no crash")
+        return 0
+    print(f"{board}: {crash['summary']}")
+    for reg in ("pc", "lr"):
+        sym = crash["symbols"].get(reg)
+        if sym:
+            print(f"  {reg:<3} {sym['address']}  {sym['text']}")
+        elif reg in crash["registers"]:
+            print(f"  {reg:<3} {crash['registers'][reg]}")
+    for i, sym in enumerate(crash["symbols"].get("call_trace") or []):
+        print(f"  #{i:<2} {sym['address']}  {sym['text']}")
+    for line in crash.get("details") or []:
+        print(f"  {line}")
+    for hint in crash.get("hints") or []:
+        print(f"hint: {hint}")
+    for e in info.get("earlier") or []:
+        print(f"earlier: {e['summary']}")
+    return 1
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     from .mcp_server import main
 
@@ -572,6 +608,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("shell-cmds", cmd_shell, "shell commands of a board's flashed image")
     sp.add_argument("board", nargs="?")
     sp.add_argument("--build", help="read them from this build dir instead (no daemon needed)")
+    sp = add("crash", cmd_crash, "the last crash seen on a board, with file:line")
+    sp.add_argument("board", nargs="?")
+    sp.add_argument("--history", action="store_true", help="also list earlier crashes")
     sp = add("acquire", cmd_acquire, "ask for a board (exit 75 while queued)")
     sp.add_argument("selector")
     sp.add_argument("--reason", default="")

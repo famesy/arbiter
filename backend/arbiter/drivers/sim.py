@@ -1,7 +1,7 @@
 """A simulated Zephyr board, so the whole system runs and tests without hardware.
 
 It boots with a Zephyr-style banner, answers a small shell (`help`, `kernel
-uptime`, `test`, `sim fault`, `sim sleep`, ...), and "flashes" any existing
+uptime`, `test`, `sim fault`, `sim assert`, `sim sleep`, ...), and "flashes" any existing
 build directory. Options under `[board.options]`:
 
     speed = 1.0          # >1 makes delays shorter (tests use 50)
@@ -127,11 +127,29 @@ class SimDriver(BoardDriver):
             self._out("PASS - test_boot in 0.001 seconds\r\nPASS - test_uart in 0.002 seconds\r\n")
             self._out("TESTSUITE sim_suite succeeded\r\nPROJECT EXECUTION SUCCESSFUL\r\n")
         elif line == "sim fault":
+            t = f"[{_ts(up)}] <err> os:"
             self._out(
-                "[00:00:05.000,000] <err> os: ***** BUS FAULT *****\r\n"
-                "[00:00:05.000,000] <err> os: Faulting instruction address (r15/pc): 0x0000a3f2\r\n"
-                "[00:00:05.000,000] <err> os: >>> ZEPHYR FATAL ERROR 0: CPU exception on CPU 0\r\n"
+                f"{t} ***** BUS FAULT *****\r\n"
+                f"{t}   Precise data bus error\r\n"
+                f"{t}   BFAR Address: 0x50008120\r\n"
+                f"{t} r0/a1:  0x00000000  r1/a2:  0x00000001  r2/a3:  0x20001c40\r\n"
+                f"{t} r3/a4:  0x50008120 r12/ip:  0x00000000 r14/lr:  0x0000a3e5\r\n"
+                f"{t}  xpsr:  0x61000000\r\n"
+                f"{t} Faulting instruction address (r15/pc): 0x0000a3f2\r\n"
+                f"{t} >>> ZEPHYR FATAL ERROR 0: CPU exception on CPU 0\r\n"
+                f"{t} Current thread: 0x20000c08 (main)\r\n"
+                f"[{_ts(up)}] <err> fatal_error: Resetting system\r\n"
             )
+            self._boot()
+        elif line == "sim assert":
+            self._out(
+                "ASSERTION FAIL [buf != NULL] @ WEST_TOPDIR/app/src/main.c:42\r\n"
+                "\tbuffer pool exhausted\r\n"
+                f"[{_ts(up)}] <err> os: >>> ZEPHYR FATAL ERROR 4: Kernel panic on CPU 0\r\n"
+                f"[{_ts(up)}] <err> os: Current thread: 0x20000c08 (main)\r\n"
+                f"[{_ts(up)}] <err> os: Halting system\r\n"
+            )
+            self.halted = True
         elif line == "sim sleep":
             self._out(f"[{_ts(up)}] <inf> {self.app}: Entering sleep\r\n")
         else:
@@ -159,7 +177,8 @@ class SimDriver(BoardDriver):
                     "Simulator controls",
                     1,
                     subcommands=[
-                        c("fault", "Print a bus fault", 1),
+                        c("assert", "Fail an assert and halt", 1),
+                        c("fault", "Bus fault, then reset", 1),
                         c("sleep", "Log entering sleep", 1),
                     ],
                 ),

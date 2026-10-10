@@ -166,6 +166,7 @@ The names match the prototype (`acquire_board`, `release_board`, `serial_expect`
 | `power_set_voltage(lease_token, mv)` | Sets the supply voltage within the board's allowed range. |
 | `measure_current(lease_token, duration_ms, trigger?)` | Returns a summary (average, min, max, peak, charge in µC, optional time-above-threshold) plus a file of the full trace. Never raw samples. |
 | `recover_board(lease_token)` | Erases the chip and unlocks APPROTECT. Needs a per-board policy or the human's confirmation in the dashboard. |
+| `last_crash(lease_token? \| board?, history?)` | The last crash seen on the board: fault type, reason, thread, registers, pc/lr/call trace as `function file:line`, the lines before it, and hints (§9). `serial_expect` timeouts, `flash` and `console_read` point to it when the board crashed. |
 
 Errors are structured and written for an LLM to read, for example:
 ```json
@@ -382,7 +383,10 @@ While a test runs, `op_in_progress=test` blocks other flash and gdb calls on tha
 - **One gdbserver per board, started on demand and bound to 127.0.0.1.** It can be JLinkGDBServer, OpenOCD, pyOCD or `probe-rs gdb`. It stays up across tool calls and dies with the lease.
 - **The daemon drives `arm-zephyr-eabi-gdb --interpreter=mi3`** through pygdbmi. That gives the small tools in [§4](#4-agent-tool-surface). Every call has a timeout, and a target still running at the timeout gets interrupted. Output is trimmed to keep the agent's tokens low.
 - **`gdb_batch`** is the escape hatch for crash dumps: fault registers, `z_fatal_error` state, backtraces. Commands are allowlisted: no `shell`, `python`, arbitrary `dump`/`restore`, or non-allowlisted `monitor`.
-- **Faults in the console get symbolised automatically.** arbiter matches a `*** FAULT ***` / `Faulting instruction address` line in the console against the lease's ELF with addr2line.
+- **Faults in the console get symbolised automatically** (built: `backend/arbiter/crash.py`). A crash watcher sees every console channel and starts a crash block on a `***** BUS FAULT *****`-style banner, `ASSERTION FAIL [...] @ file:line`, `>>> ZEPHYR FATAL ERROR n`, or TF-M's `FATAL ERROR:` on `uart:tfm`. The block ends at `Halting system` / `Resetting system`, the next boot banner, or after 0.75 s of quiet. arbiter parses the fault type, reason code, thread, registers, fault addresses (MMFAR/BFAR/SFAR) and any call trace, then maps pc, lr and the trace to `function file:line` with the toolchain's addr2line. It finds addr2line through the image's CMakeCache (`CMAKE_ADDR2LINE`, or next to `CMAKE_GDB`/`CMAKE_OBJDUMP`), then on PATH (`arm-zephyr-eabi-addr2line`, `llvm-addr2line`). Without one it falls back to `function+offset` from the ELF symbol table. The ELF is the default image of the last build flashed through arbiter (remembered across daemon restarts).
+  - The holder gets an inbox notice, the terminal shows `[arbiter] crash: ...`, and `list_boards` carries `last_crash`. A `serial_expect` that times out after a crash says so instead of a bare timeout.
+  - The same crash again within 2 minutes counts as a repeat (`[3 times]`), which covers boot loops and RTT replaying the previous run's text.
+  - Hints come from the image's `.config`: deferred logging (lines before the crash may be lost), `CONFIG_ASSERT_VERBOSE`, the thread analyzer for stack overflows, and coredump for a full backtrace. `#CD:` coredump lines are kept apart from the report for the coredump step.
 - **When you pause a lease,** the gdbserver is freed, so your own debugger (VS Code, Ozone) attaches cleanly.
 
 ---

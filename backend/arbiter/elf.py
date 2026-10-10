@@ -13,7 +13,12 @@ from pathlib import Path
 SHT_SYMTAB = 2
 SHT_NOBITS = 8
 SHF_ALLOC = 0x2
+STT_FUNC = 2
+EM_386 = 3
+EM_ARM = 40
 EM_X86_64 = 62
+EM_AARCH64 = 183
+EM_RISCV = 243
 
 
 class ElfError(ValueError):
@@ -40,6 +45,7 @@ class Elf:
         (self.machine,) = struct.unpack_from(self.end + "H", data, 0x12)
         self.sections = [self._section(i) for i in range(self._shnum())]
         self._symbols: dict[str, int] | None = None
+        self._funcs: list[tuple[int, int, str]] | None = None
 
     @classmethod
     def load(cls, path: Path) -> Elf:
@@ -77,6 +83,13 @@ class Elf:
 
     def _read_symbols(self) -> dict[str, int]:
         out: dict[str, int] = {}
+        for name, value, _size, _info in self._symtab():
+            out.setdefault(name, value)
+        return out
+
+    def _symtab(self) -> list[tuple[str, int, int, int]]:
+        """(name, value, size, info) of every named .symtab entry."""
+        out: list[tuple[str, int, int, int]] = []
         for i in range(len(self.sections)):
             _n, typ, _f, _a, off, size, link, _i, _al, entsize = self._raw_section(i)
             if typ != SHT_SYMTAB or not entsize:
@@ -85,18 +98,36 @@ class Elf:
             for j in range(size // entsize):
                 o = off + j * entsize
                 if self.is64:
-                    st_name, _info, _other, _shndx, value, _sz = struct.unpack_from(
+                    st_name, info, _other, _shndx, value, sz = struct.unpack_from(
                         self.end + "IBBHQQ", self.data, o
                     )
                 else:
-                    st_name, value, _sz, _info, _other, _shndx = struct.unpack_from(
+                    st_name, value, sz, info, _other, _shndx = struct.unpack_from(
                         self.end + "IIIBBH", self.data, o
                     )
                 if st_name:
                     name_end = self.data.find(b"\x00", stroff + st_name)
                     name = self.data[stroff + st_name : name_end].decode("latin-1")
-                    out.setdefault(name, int(value))
+                    out.append((name, int(value), int(sz), int(info)))
         return out
+
+    def function_at(self, addr: int) -> tuple[str, int] | None:
+        """(function, offset) of the function symbol that contains `addr`. Thumb function
+        symbols have bit 0 set; it is ignored here."""
+        if self._funcs is None:
+            mask = ~1 if self.machine == EM_ARM else ~0
+            self._funcs = sorted(
+                (value & mask, size, name)
+                for name, value, size, info in self._symtab()
+                if info & 0xF == STT_FUNC and size
+            )
+        best: tuple[str, int] | None = None
+        for start, size, name in self._funcs:
+            if start > addr:
+                break
+            if addr < start + size:
+                best = (name, addr - start)
+        return best
 
     def symbol(self, name: str) -> int | None:
         return self.symbols.get(name)
