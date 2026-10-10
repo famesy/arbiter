@@ -27,12 +27,17 @@ from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, imag
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
 from .coredump import analyze, find_tools
 from .crash import REPEAT_WINDOW_S, Crash, CrashWatcher, image_info, symbolize
+from .dictlog import Tools as DictlogTools
+from .dictlog import decode as decode_dictlog
+from .dictlog import find_tools as dictlog_tools
 from .drivers import discovery
 from .drivers.base import BoardDriver
 from .errors import ArbiterError
 from .gdb import DebugSession
 from .history import History, compare, named_tests
 from .imageinfo import describe_build, fingerprint, git_state
+from .logfilter import LogFilter
+from .logfilter import apply as log_filter
 from .nrf91 import FINAL_RX, STATUS_COMMANDS, check_at, convert_trace, response, summarize
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
@@ -152,6 +157,7 @@ class BoardRuntime:
     debug: DebugSession | None = None  # gdb attached through the board's GDB server
     debug_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     trace: dict[str, Any] | None = None  # a modem trace capture in progress
+    boot_mark: dict[str, int] = field(default_factory=dict)  # channel ends at the last flash/reset
 
 
 class Arbiter:
@@ -1116,6 +1122,7 @@ class Arbiter:
     def _mark(self, lease: sch.Lease, rt: BoardRuntime) -> None:
         """serial_expect(since="mark") searches from here: set at grant, flash, reset and power."""
         self.marks[lease.token] = rt.hub.ends()
+        rt.boot_mark = rt.hub.ends()
 
     def console_read(
         self,
@@ -1124,8 +1131,17 @@ class Arbiter:
         cursor: int | None = None,
         max_bytes: int = 8192,
         channel: str | list[str] | None = None,
+        level: str | None = None,
+        module: str | None = None,
+        grep: str | None = None,
     ) -> dict[str, Any]:
+        """Output since your last read. level / module / grep filter Zephyr log lines
+        (logfilter.py); the cursor still moves past what was filtered out."""
         _lease, rt = self._check(token, session_id)
+        try:
+            filt = LogFilter.make(level, module, grep)
+        except ValueError as e:
+            raise ArbiterError("BAD_REQUEST", str(e)) from None
         names = [ALL] if channel == ALL else rt.hub.resolve_many(channel)
         mine = self.cursors.setdefault(token, {})
         out: dict[str, Any] = {"note": UNTRUSTED}
@@ -1136,13 +1152,21 @@ class Arbiter:
                 if cursor is not None and len(names) == 1
                 else mine.get(name, self.marks.get(token, {}).get(name, 0))
             )
-            data, nxt, dropped = rt.hub.read(start, min(max_bytes, 65536), name)
+            size = min(max_bytes * (4 if filt else 1), 65536)
+            data, nxt, dropped = rt.hub.read(start, size, name)
+            text = data.decode(errors="replace")
+            stats: dict[str, Any] | None = None
+            if filt:
+                text, used, stats = log_filter(data, filt, final=False)
+                nxt = nxt - len(data) + used
             mine[name] = nxt
             entry: dict[str, Any] = {
-                "untrusted_device_output": data.decode(errors="replace"),
+                "untrusted_device_output": text,
                 "cursor": nxt,
                 "more": nxt < rt.hub.end(name),
             }
+            if stats is not None:
+                entry["filter"] = stats
             if dropped:
                 entry["dropped_bytes"] = dropped
             crashes = [
@@ -1165,6 +1189,50 @@ class Arbiter:
             others = rt.hub.new_lines(mine, exclude={rt.hub.primary, "uart:tfm"})
             if others:
                 out["also_active"] = ", ".join(f"{n} ({c} new lines)" for n, c in others.items())
+        return out
+
+    @staticmethod
+    def _dictlog_tools(rt: BoardRuntime, build_dir: str | None) -> DictlogTools | str:
+        if build_dir:
+            top = Path(build_dir).resolve()
+            dirs = image_dirs(top)
+            if not dirs:
+                raise ArbiterError("BAD_REQUEST", f"{build_dir} is not a Zephyr build")
+            return dictlog_tools(dirs[0][1], top)
+        if rt.image is None:
+            raise ArbiterError(
+                "BAD_REQUEST", "arbiter didn't flash this board: pass the build_dir you flashed"
+            )
+        return dictlog_tools(Path(rt.image["image_dir"]), Path(rt.image["build_dir"]))
+
+    async def decode_log(
+        self,
+        session_id: str | None,
+        token: str,
+        build_dir: str | None = None,
+        channel: str | None = None,
+        since: str = "boot",
+    ) -> dict[str, Any]:
+        """Dictionary logging: decode what the channel captured since the last flash, reset
+        or power cycle ("boot"), your expect mark ("mark") or the whole buffer ("all"),
+        with the build's log_dictionary.json."""
+        lease, rt = self._check(token, session_id)
+        tools = await asyncio.to_thread(self._dictlog_tools, rt, build_dir)
+        if isinstance(tools, str):
+            return {"ok": False, "error": tools}
+        name = rt.hub.resolve(channel)
+        ch = rt.hub.channels.get(name)
+        if ch is None:
+            raise ArbiterError("BAD_REQUEST", f"no channel {name!r}")
+        if since not in ("boot", "mark", "all"):
+            raise ArbiterError("BAD_REQUEST", "since is boot, mark or all")
+        marks = {"boot": rt.boot_mark, "mark": self.marks.get(token, {}), "all": {}}[since]
+        start = marks.get(name, 0)
+        data = ch.since(start)
+        work = self._lease_dir(lease) / f"dictlog-{time.strftime('%H%M%S')}"
+        out = await asyncio.to_thread(decode_dictlog, data, tools, work)
+        out["channel"] = name
+        out["note"] = UNTRUSTED
         return out
 
     async def expect(

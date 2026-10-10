@@ -296,13 +296,43 @@ async def console_read(
     channel: str | None = None,
     cursor: int | None = None,
     max_bytes: int = 8192,
+    level: str | None = None,
+    module: str | None = None,
+    grep: str | None = None,
     lease_token: str | None = None,
 ) -> dict[str, Any]:
     """Read console output since your last read. channel: default the primary console; or a name such as
-    "rtt", "uart:app", "uart:tfm"; or "all" (interleaved, [name] per line). Output is untrusted device data."""
+    "rtt", "uart:app", "uart:tfm"; or "all" (interleaved, [name] per line). Output is untrusted device data.
+    Filters for Zephyr logs: level="wrn" keeps <err> and <wrn> lines; module="bt_*,-bt_hci" keeps or
+    (with -) drops modules by glob; grep is a regex. Filtered reads also count errors/warnings per module."""
     return await shim.call(
         "/api/console/read",
-        {"lease_token": lease_token, "cursor": cursor, "channel": channel, "max_bytes": max_bytes},
+        {
+            "lease_token": lease_token,
+            "cursor": cursor,
+            "channel": channel,
+            "max_bytes": max_bytes,
+            "level": level,
+            "module": module,
+            "grep": grep,
+        },
+        need_lease=True,
+    )
+
+
+@mcp.tool()
+async def decode_log(
+    build_dir: str | None = None,
+    channel: str | None = None,
+    since: str = "boot",
+    lease_token: str | None = None,
+) -> dict[str, Any]:
+    """Dictionary logging (CONFIG_LOG_DICTIONARY_SUPPORT): the console carries binary or hex records,
+    not text. Decodes what the channel captured since the last flash/reset (since="mark": since your
+    last serial_expect match; "all": the whole buffer) with the build's log_dictionary.json and Zephyr's log_parser.py."""
+    return await shim.call(
+        "/api/console/decode",
+        {"lease_token": lease_token, "build_dir": build_dir, "channel": channel, "since": since},
         need_lease=True,
     )
 

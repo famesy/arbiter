@@ -329,13 +329,40 @@ def cmd_read(args: argparse.Namespace) -> int:
     c = Client()
     res = c.post(
         "/api/console/read",
-        {"lease_token": _lease(c, args), "cursor": args.cursor, "channel": args.channel},
+        {
+            "lease_token": _lease(c, args),
+            "cursor": args.cursor,
+            "channel": args.channel,
+            "level": args.level,
+            "module": args.module,
+            "grep": args.grep,
+        },
     )
     if args.json:
         _print(res, True)
     else:
         sys.stdout.write(res["untrusted_device_output"])
     return 0
+
+
+def cmd_decode(args: argparse.Namespace) -> int:
+    c = Client()
+    body = {
+        "lease_token": _lease(c, args),
+        "channel": args.channel,
+        "since": "all" if args.all else "boot",
+    }
+    if args.build:
+        body["build_dir"] = str(Path(args.build).resolve())
+    res = c.post("/api/console/decode", body)
+    if args.json:
+        _print(res, True)
+    else:
+        if res.get("untrusted_device_output"):
+            print(res["untrusted_device_output"])
+        if res.get("error"):
+            print(f"error: {res['error']}", file=sys.stderr)
+    return 0 if res.get("ok") else 1
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -757,6 +784,9 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "read":
             sp.add_argument("--cursor", type=int)
             sp.add_argument("--channel", help="console (default), all, rtt, uart:app, ...")
+            sp.add_argument("--level", help="log lines at this level or worse: err, wrn, inf, dbg")
+            sp.add_argument("--module", help="log modules, comma-separated globs; -name excludes")
+            sp.add_argument("--grep", help="only lines matching this regex")
     sp = add("flash", cmd_flash, "flash a build dir to your board")
     sp.add_argument("build_dir")
     sp.add_argument("--domain")
@@ -790,6 +820,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20)
     sp.add_argument("--last-good", action="store_true", help="last passing run and what changed")
     sp.add_argument("--build", help="with --last-good: diff Kconfig against this build")
+    sp = add("decode-log", cmd_decode, "decode dictionary logging captured since the last flash")
+    sp.add_argument("--build", help="the flashed build dir, if arbiter didn't flash it")
+    sp.add_argument("--channel")
+    sp.add_argument(
+        "--all", action="store_true", help="decode the whole buffer, not since the last flash/reset"
+    )
+    sp.add_argument("--lease")
     sp = add("at", cmd_at, "nRF91: send one AT command to the modem through your board's app")
     sp.add_argument("cmd")
     sp.add_argument("--timeout", type=float, default=10)
