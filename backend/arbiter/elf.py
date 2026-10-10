@@ -9,10 +9,13 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 SHT_SYMTAB = 2
 SHT_NOBITS = 8
+SHF_WRITE = 0x1
 SHF_ALLOC = 0x2
+STT_OBJECT = 1
 STT_FUNC = 2
 EM_386 = 3
 EM_ARM = 40
@@ -83,13 +86,13 @@ class Elf:
 
     def _read_symbols(self) -> dict[str, int]:
         out: dict[str, int] = {}
-        for name, value, _size, _info in self._symtab():
+        for name, value, _size, _info, _shndx in self._symtab():
             out.setdefault(name, value)
         return out
 
-    def _symtab(self) -> list[tuple[str, int, int, int]]:
-        """(name, value, size, info) of every named .symtab entry."""
-        out: list[tuple[str, int, int, int]] = []
+    def _symtab(self) -> list[tuple[str, int, int, int, int]]:
+        """(name, value, size, info, section index) of every named .symtab entry."""
+        out: list[tuple[str, int, int, int, int]] = []
         for i in range(len(self.sections)):
             _n, typ, _f, _a, off, size, link, _i, _al, entsize = self._raw_section(i)
             if typ != SHT_SYMTAB or not entsize:
@@ -98,18 +101,55 @@ class Elf:
             for j in range(size // entsize):
                 o = off + j * entsize
                 if self.is64:
-                    st_name, info, _other, _shndx, value, sz = struct.unpack_from(
+                    st_name, info, _other, shndx, value, sz = struct.unpack_from(
                         self.end + "IBBHQQ", self.data, o
                     )
                 else:
-                    st_name, value, sz, info, _other, _shndx = struct.unpack_from(
+                    st_name, value, sz, info, _other, shndx = struct.unpack_from(
                         self.end + "IIIBBH", self.data, o
                     )
                 if st_name:
                     name_end = self.data.find(b"\x00", stroff + st_name)
                     name = self.data[stroff + st_name : name_end].decode("latin-1")
-                    out.append((name, int(value), int(sz), int(info)))
+                    out.append((name, int(value), int(sz), int(info), int(shndx)))
         return out
+
+    def memory_use(self, top: int = 10) -> dict[str, Any]:
+        """Bytes of flash (code, read-only and initialised data) and RAM (data, bss,
+        noinit) the image uses, from its allocated sections, with the biggest symbols."""
+        rom = ram = 0
+        for sec in self.sections:
+            if not sec.flags & SHF_ALLOC or not sec.size:
+                continue
+            if sec.flags & SHF_WRITE:
+                ram += sec.size
+                if sec.type != SHT_NOBITS:
+                    rom += sec.size  # initialised data is stored in flash and copied
+            else:
+                rom += sec.size
+        big_rom: list[tuple[int, str]] = []
+        big_ram: list[tuple[int, str]] = []
+        for name, _value, size, info, shndx in self._symtab():
+            if (
+                not size
+                or info & 0xF not in (STT_OBJECT, STT_FUNC)
+                or not 0 < shndx < len(self.sections)
+            ):
+                continue
+            sec = self.sections[shndx]
+            if not sec.flags & SHF_ALLOC:
+                continue
+            (big_ram if sec.flags & SHF_WRITE else big_rom).append((size, name))
+        return {
+            "flash_bytes": rom,
+            "ram_bytes": ram,
+            "largest_flash": [
+                {"symbol": n, "bytes": b} for b, n in sorted(big_rom, reverse=True)[:top]
+            ],
+            "largest_ram": [
+                {"symbol": n, "bytes": b} for b, n in sorted(big_ram, reverse=True)[:top]
+            ],
+        }
 
     def function_at(self, addr: int) -> tuple[str, int] | None:
         """(function, offset) of the function symbol that contains `addr`. Thumb function
@@ -118,7 +158,7 @@ class Elf:
             mask = ~1 if self.machine == EM_ARM else ~0
             self._funcs = sorted(
                 (value & mask, size, name)
-                for name, value, size, info in self._symtab()
+                for name, value, size, info, _shndx in self._symtab()
                 if info & 0xF == STT_FUNC and size
             )
         best: tuple[str, int] | None = None

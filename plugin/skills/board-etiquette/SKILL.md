@@ -146,6 +146,17 @@ one go. If the run left the board unbootable, it keeps the board for you
 instead: flash a working image, then `arbiter release`. Exit codes: `0` OK, `75` still queued (run again to keep your place),
 `76` paused, `77` revoked or expired.
 
+## Knowing what you flashed, and what changed
+
+- `image_info(build_dir)` summarises a build without a board: target,
+  images, MCUboot/TF-M, partitions, key Kconfig, flash/RAM use and the
+  biggest symbols, git state, and warnings. Check it before flashing a
+  build you didn't make.
+- Something worked before and now fails? `last_good(test="tests/ble",
+  build_dir=...)` gives the last passing run and what changed since (Kconfig
+  diff and the commits and files in your repo). `history()` lists recent
+  flashes and runs on each board.
+
 ## When the board crashes
 
 arbiter watches every console channel for Zephyr fatal errors (faults,
