@@ -45,7 +45,15 @@ from .history import History, compare, named_tests
 from .imageinfo import describe_build, file_hash, fingerprint, git_state
 from .logfilter import LogFilter
 from .logfilter import apply as log_filter
-from .nrf91 import FINAL_RX, STATUS_COMMANDS, check_at, convert_trace, response, summarize
+from .nrf91 import (
+    FINAL_RX,
+    STATUS_COMMANDS,
+    WILDCARD_HINT,
+    check_at,
+    convert_trace,
+    response,
+    summarize,
+)
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, ProcResult, kill_tree, run_proc
@@ -1680,6 +1688,8 @@ class Arbiter:
             for key in ("crash", "hint", "error"):
                 if res.get(key) and not out["final"]:
                     out[key] = res[key]
+            if not out["final"] and re.search(r"[?*]", cmd):
+                out["hint"] = WILDCARD_HINT
         else:
             name = rt.hub.primary
             start = rt.hub.end(name)
