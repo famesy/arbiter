@@ -30,6 +30,7 @@ from .crash import REPEAT_WINDOW_S, Crash, CrashWatcher, image_info, symbolize
 from .drivers import discovery
 from .drivers.base import BoardDriver
 from .errors import ArbiterError
+from .gdb import DebugSession
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, kill_tree, run_proc
@@ -145,6 +146,8 @@ class BoardRuntime:
     image: dict[str, Any] | None = None  # the last flashed image's ELF (crash symbols)
     watcher: CrashWatcher | None = None
     crashes: deque[Crash] = field(default_factory=lambda: deque(maxlen=20))
+    debug: DebugSession | None = None  # gdb attached through the board's GDB server
+    debug_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class Arbiter:
@@ -320,6 +323,7 @@ class Arbiter:
         lease_d = data["lease"]
         state = data.get("state") or lease_d["state"]
         await self._cancel_waits(rt)
+        await self._debug_close(rt)
         if rt.op and rt.op.lease_id == lease_d["id"] and rt.op.task and not rt.op.task.done():
             rt.op.task.cancel()
         live = {k for k, le in self.sched.leases.items() if le.state in sch.LIVE_LEASE_STATES}
@@ -470,6 +474,7 @@ class Arbiter:
             raise ArbiterError(
                 "BOARD_BUSY", f"{rt.op.kind} is running on {rt.cfg.id}", op_id=rt.op.id
             )
+        await self._debug_close(rt)  # the GDB server holds the probe
         op = Op(
             id="op-" + secrets.token_hex(4),
             kind=kind,
@@ -990,6 +995,7 @@ class Arbiter:
             raise ArbiterError("BOARD_BUSY", f"{rt.op.kind} is running", op_id=rt.op.id)
         self._mark(lease, rt)
         rt.hub.annotate(f"[arbiter] {self._who(lease.session_id)} reset{' (halt)' if halt else ''}")
+        await self._debug_close(rt)
         async with rt.probe_lock:
             res = await rt.driver.reset(halt=halt, log_path=self._lease_dir(lease) / "reset.log")
         return {"status": "done", **res}
@@ -1205,6 +1211,129 @@ class Arbiter:
             "did_you_mean": close,
             "hint": "Commands come from the ELF you flashed; see shell_commands for the list.",
         }
+
+    # ------------------------------------------------------------------ debugging (§9)
+    async def _debug(
+        self, lease: sch.Lease, rt: BoardRuntime, build_dir: str | None = None
+    ) -> tuple[DebugSession, bool]:
+        """The board's debug session, started if needed; True when it was just started."""
+        if rt.debug is not None:
+            return rt.debug, False
+        self._need(rt, "debug")
+        if rt.op and rt.op.ended is None:
+            raise ArbiterError("BOARD_BUSY", f"{rt.op.kind} is running", op_id=rt.op.id)
+        image = rt.image
+        if build_dir:
+            image = await asyncio.to_thread(lambda: image_info(Path(build_dir).resolve()))
+        if image is None:
+            raise ArbiterError(
+                "BAD_REQUEST",
+                "arbiter doesn't know which ELF is on the board",
+                hint="Pass build_dir (the build that is flashed), or flash it with flash first.",
+            )
+        detached = await rt.driver.detach_debug()  # RTT shares the probe
+        log_path = self._lease_dir(lease) / "debugserver.log"
+        try:
+            sess = await DebugSession.open(
+                rt.cfg.id,
+                image,
+                lambda port: rt.driver.debugserver(Path(image["build_dir"]), port, log_path),
+            )
+        except BaseException:
+            await rt.driver.reattach_debug(detached)
+            raise
+        sess.detached = detached
+        rt.debug = sess
+        rt.hub.annotate(f"[arbiter] {self._who(lease.session_id)} attached a debugger (halted)")
+        self.bus.publish("board.debug", {"board": rt.cfg.id, "attached": True})
+        return sess, True
+
+    async def _debug_close(self, rt: BoardRuntime, resume: bool = True) -> bool:
+        sess, rt.debug = rt.debug, None
+        if sess is None:
+            return False
+        await sess.close(resume)
+        with contextlib.suppress(Exception):
+            await rt.driver.reattach_debug(sess.detached)
+        rt.hub.annotate("[arbiter] debugger detached" + (" (running)" if resume else ""))
+        self.bus.publish("board.debug", {"board": rt.cfg.id, "attached": False})
+        return True
+
+    async def gdb_start(
+        self, session_id: str | None, token: str, build_dir: str | None = None
+    ) -> dict[str, Any]:
+        lease, rt = self._check(token, session_id)
+        async with rt.debug_lock:
+            sess, started = await self._debug(lease, rt, build_dir)
+            out: dict[str, Any] = {
+                "status": "attached" if started else "already_attached",
+                "elf": str(sess.elf),
+                **await sess.where(),
+                "note": UNTRUSTED,
+            }
+        out["hint"] = (
+            "The target is halted. gdb_batch runs commands (bt, print, x, break, watch, "
+            "next, finish ...), gdb_continue runs until a breakpoint or a timeout, and "
+            "gdb_stop detaches and lets the board run."
+        )
+        return out
+
+    async def gdb_batch(
+        self,
+        session_id: str | None,
+        token: str,
+        cmds: list[str] | str,
+        timeout_s: float = 10,
+        build_dir: str | None = None,
+    ) -> dict[str, Any]:
+        lease, rt = self._check(token, session_id)
+        if isinstance(cmds, str):
+            cmds = [cmds]
+        timeout_s = max(1.0, min(float(timeout_s), MAX_WAIT_S))
+        async with rt.debug_lock:
+            sess, _ = await self._debug(lease, rt, build_dir)
+            results = await sess.batch(list(cmds), timeout_s)
+        return {"results": results, "note": UNTRUSTED}
+
+    async def gdb_continue(
+        self, session_id: str | None, token: str, timeout_s: float = 10
+    ) -> dict[str, Any]:
+        lease, rt = self._check(token, session_id)
+        timeout_s = max(0.5, min(float(timeout_s), MAX_WAIT_S))
+        async with rt.debug_lock:
+            sess, _ = await self._debug(lease, rt)
+            out = await sess.cont(timeout_s)
+        stop = out.get("stopped") or {}
+        if stop.get("interrupted_after_timeout"):
+            out["hint"] = f"No breakpoint hit within {timeout_s:g} s; arbiter halted the target."
+        out["note"] = UNTRUSTED
+        return out
+
+    async def gdb_stop(
+        self, session_id: str | None, token: str, resume: bool = True
+    ) -> dict[str, Any]:
+        _lease, rt = self._check(token, session_id)
+        async with rt.debug_lock:
+            was = await self._debug_close(rt, resume)
+        return {"ok": True, "detached": was, "running": resume}
+
+    async def inspect_hung(
+        self, session_id: str | None, token: str, build_dir: str | None = None
+    ) -> dict[str, Any]:
+        """Halt, back-trace and list threads with what each waits on, then resume."""
+        lease, rt = self._check(token, session_id)
+        async with rt.debug_lock:
+            sess, started = await self._debug(lease, rt, build_dir)
+            try:
+                out = await sess.inspect()
+            finally:
+                if started:
+                    await self._debug_close(rt, resume=True)
+                else:
+                    await sess.gdb.resume()
+        out["resumed"] = True
+        out["note"] = UNTRUSTED
+        return out
 
     # ------------------------------------------------------------------ run (tests)
     async def run(
@@ -1543,6 +1672,7 @@ class Arbiter:
         rt.hub.annotate(f"[arbiter] paused by {by}" + (f": {reason}" if reason else ""))
         if op and lease:
             self._spawn(self._drain(rt, op, lease, force))
+        await self._debug_close(rt)  # frees the probe for the human's own debugger
         rt.detached_for_pause = await rt.driver.detach_debug()
         return {
             "ok": True,
@@ -1640,6 +1770,7 @@ class Arbiter:
         self._human_may_drive(board_id, by)
         self._need(rt, "flash")
         rt.hub.annotate(f"[arbiter] human:{by} flashing {build_dir}")
+        await self._debug_close(rt)
         start = rt.hub.ends()
         async with rt.probe_lock:
             detached = await rt.driver.detach_debug()
@@ -1682,6 +1813,7 @@ class Arbiter:
         rt = self.rt(board_id)
         self._human_may_drive(board_id, by)
         rt.hub.annotate(f"[arbiter] human:{by} reset")
+        await self._debug_close(rt)
         async with rt.probe_lock:
             return await rt.driver.reset(halt=halt, log_path=self._board_log(rt, "reset"))
 

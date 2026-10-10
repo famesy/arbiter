@@ -163,6 +163,19 @@ dump prints as `#CD:` lines; arbiter runs Zephyr's coredump tools and the
 build's gdb on them and puts the result in `coredump_report.backtrace`. No
 debugger or probe is needed.
 
+## When the board hangs, and debugging
+
+- **Board silent or stuck?** Call `inspect_hung()`. It halts the board, gives
+  the backtrace and every thread with its state and what it waits on (for
+  example `waits on my_mutex`), then lets it run again. The thread list needs
+  `CONFIG_THREAD_MONITOR=y` (and `CONFIG_THREAD_NAME=y` for names).
+- **Step through code**: `gdb_batch(cmds=["break sensor.c:42"])`, then
+  `gdb_continue(timeout_s=20)`, then `gdb_batch(cmds=["bt", "info locals",
+  "print/x reg", "next"])`. A watchpoint (`watch buf[3]`) plus `gdb_continue`
+  finds who corrupts memory. Call `gdb_stop()` when done. Flash, reset, `run`
+  and release detach gdb on their own.
+- Never run `west debug` or a GDB server yourself; the hook blocks it.
+
 ## Power and current
 
 Only on boards with a power device (a PPK2 or a controllable supply);

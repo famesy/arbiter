@@ -13,6 +13,7 @@ two probes never trigger an interactive "select emulator" prompt.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import time
 from pathlib import Path
@@ -23,7 +24,7 @@ from ..console.detect import ConsoleMap, detect_from_build
 from ..console.hub import ConsoleHub
 from ..console.sources import RttSource, UartSource
 from ..errors import ArbiterError
-from ..procs import run_proc, which
+from ..procs import run_proc, start_detached, which
 from ..workspace import west_context
 from . import discovery
 from .base import BoardDriver, LineFn
@@ -41,7 +42,7 @@ JLINK_DEVICES = {
 
 class WestDriver(BoardDriver):
     kind = "west"
-    capabilities = frozenset({"flash", "console", "run"})
+    capabilities = frozenset({"flash", "console", "run", "debug"})
     flash_timeout = 300.0
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
@@ -175,6 +176,26 @@ class WestDriver(BoardDriver):
             out["console"] = (await self._after_flash(build_dir)).to_dict()
         return out
 
+    async def debugserver(
+        self, build_dir: Path, port: int, log_path: Path
+    ) -> asyncio.subprocess.Process:
+        """`west debugserver` with the board's debug runner (J-Link on Nordic DKs, OpenOCD on
+        most ST boards), or `options.debug_runner`."""
+        argv = [
+            self.tool("west"),
+            "debugserver",
+            "-d",
+            str(build_dir),
+            "--dev-id",
+            self.cfg.probe_serial or "",
+            "--gdb-port",
+            str(port),
+        ]
+        if self.cfg.options.get("debug_runner"):
+            argv += ["-r", str(self.cfg.options["debug_runner"])]
+        env, run_in = west_context(build_dir, self.cfg.zephyr_base, build_dir.parent)
+        return await start_detached(argv, cwd=run_in, env=env, log_path=log_path)
+
     def run_env(self) -> dict[str, str]:
         env = super().run_env()
         if self.zephyr_base:
@@ -195,7 +216,7 @@ class WestDriver(BoardDriver):
 
 class NrfDriver(WestDriver):
     kind = "nrf"
-    capabilities = frozenset({"flash", "reset", "recover", "console", "rtt", "run"})
+    capabilities = frozenset({"flash", "reset", "recover", "console", "rtt", "run", "debug"})
     default_runner = "nrfutil"  # what `west flash` uses for these boards in NCS v3
 
     def __init__(self, cfg: BoardConfig, hub: ConsoleHub, state_dir: Path | None = None):
@@ -286,7 +307,7 @@ class NrfDriver(WestDriver):
 
 class Stm32Driver(WestDriver):
     kind = "stm32"
-    capabilities = frozenset({"flash", "reset", "recover", "console", "run"})
+    capabilities = frozenset({"flash", "reset", "recover", "console", "run", "debug"})
 
     def _conn(self) -> list[str]:
         return ["-c", "port=SWD", f"sn={self.cfg.probe_serial}"]

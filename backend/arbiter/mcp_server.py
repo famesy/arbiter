@@ -359,6 +359,59 @@ async def shell_exec(
 
 
 @mcp.tool()
+async def inspect_hung(
+    build_dir: str | None = None, lease_token: str | None = None
+) -> dict[str, Any]:
+    """Board stuck or silent? Halts it, returns the current backtrace and every Zephyr thread with its
+    state, priority and what it is pended on (e.g. a semaphore or mutex by name), then lets it run
+    again. Uses the ELF you flashed, or build_dir. Thread list needs CONFIG_THREAD_MONITOR=y."""
+    return await shim.call(
+        "/api/gdb/inspect", {"lease_token": lease_token, "build_dir": build_dir}, need_lease=True
+    )
+
+
+@mcp.tool()
+async def gdb_start(build_dir: str | None = None, lease_token: str | None = None) -> dict[str, Any]:
+    """Attach gdb to your board through its GDB server; the target halts. Uses the ELF you flashed,
+    or build_dir. The other gdb_* tools start it on their own too. Call gdb_stop when done."""
+    return await shim.call(
+        "/api/gdb/start", {"lease_token": lease_token, "build_dir": build_dir}, need_lease=True
+    )
+
+
+@mcp.tool()
+async def gdb_batch(
+    cmds: list[str], timeout_s: float = 10, lease_token: str | None = None
+) -> dict[str, Any]:
+    """Run gdb CLI commands in order and get each one's output: bt, info locals, print/x var, x/16xw
+    addr, frame N, break file.c:42, watch var, delete, next, step, finish, set var x = 1, monitor reset.
+    Stepping waits for the stop (up to timeout_s, then halts). Host-side commands are refused."""
+    return await shim.call(
+        "/api/gdb/batch",
+        {"lease_token": lease_token, "cmds": cmds, "timeout_s": timeout_s},
+        need_lease=True,
+    )
+
+
+@mcp.tool()
+async def gdb_continue(timeout_s: float = 10, lease_token: str | None = None) -> dict[str, Any]:
+    """Let the target run until a breakpoint or watchpoint hits, or halt it after timeout_s (max 45).
+    Returns why it stopped and the backtrace."""
+    return await shim.call(
+        "/api/gdb/continue", {"lease_token": lease_token, "timeout_s": timeout_s}, need_lease=True
+    )
+
+
+@mcp.tool()
+async def gdb_stop(resume: bool = True, lease_token: str | None = None) -> dict[str, Any]:
+    """Detach gdb and stop the GDB server; the board runs on unless resume is false. Flash, reset,
+    run and release do this on their own."""
+    return await shim.call(
+        "/api/gdb/stop", {"lease_token": lease_token, "resume": resume}, need_lease=True
+    )
+
+
+@mcp.tool()
 async def run(
     cmd: list[str] | str,
     cwd: str | None = None,

@@ -274,6 +274,29 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
             body.get("channel"),
         )
 
+    async def gdb_start(ctx: Ctx, body: Body) -> Any:
+        return await arb.gdb_start(sid(ctx), body["lease_token"], body.get("build_dir"))
+
+    async def gdb_batch(ctx: Ctx, body: Body) -> Any:
+        return await arb.gdb_batch(
+            sid(ctx),
+            body["lease_token"],
+            body["cmds"],
+            float(body.get("timeout_s", 10)),
+            body.get("build_dir"),
+        )
+
+    async def gdb_continue(ctx: Ctx, body: Body) -> Any:
+        return await arb.gdb_continue(
+            sid(ctx), body["lease_token"], float(body.get("timeout_s", 10))
+        )
+
+    async def gdb_stop(ctx: Ctx, body: Body) -> Any:
+        return await arb.gdb_stop(sid(ctx), body["lease_token"], bool(body.get("resume", True)))
+
+    async def inspect_hung(ctx: Ctx, body: Body) -> Any:
+        return await arb.inspect_hung(sid(ctx), body["lease_token"], body.get("build_dir"))
+
     async def console_detect(ctx: Ctx, body: Body) -> Any:
         return await arb.detect_console(
             sid(ctx), body["lease_token"], body.get("build_dir"), body.get("elf")
@@ -553,6 +576,11 @@ def create_app(arb: Arbiter, auth: Auth, dashboard_dir: Path | None = None) -> S
         Route("/api/console/write", a(console_write), methods=["POST"]),
         Route("/api/console/detect", a(console_detect), methods=["POST"]),
         Route("/api/console/shell", a(console_shell), methods=["POST"]),
+        Route("/api/gdb/start", a(gdb_start), methods=["POST"]),
+        Route("/api/gdb/batch", a(gdb_batch), methods=["POST"]),
+        Route("/api/gdb/continue", a(gdb_continue), methods=["POST"]),
+        Route("/api/gdb/stop", a(gdb_stop), methods=["POST"]),
+        Route("/api/gdb/inspect", a(inspect_hung), methods=["POST"]),
         Route("/api/run", a(run), methods=["POST"]),
         Route("/api/ops/{op}", a(op_status), methods=["GET"]),
         Route("/api/power", a(power), methods=["POST"]),
