@@ -87,7 +87,7 @@ export function BoardBar({ id, state = "available", level = "", status, actions,
 }
 
 /** Label/value pairs in two columns, as in the board's Info sheet. rows: [[label, value, tone?]]; falsy rows are skipped. */
-export function KV({ rows = [] } = {}) {
+export function KeyValues({ rows = [] } = {}) {
   return h("div", { class: "kv" }, rows.filter(Boolean).map(([k, v, tone]) =>
     [h("span", { class: "k" }, k), h("span", { class: cls("v", tone) }, v)]));
 }
