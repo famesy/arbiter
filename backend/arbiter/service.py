@@ -31,7 +31,7 @@ from .console.detect import ConsoleMap, detect_from_build, detect_from_elf, imag
 from .console.hub import ALL, ANY, ConsoleHub, Sender, WriteRecord
 from .coredump import analyze, find_tools
 from .crash import REPEAT_WINDOW_S, Crash, CrashWatcher, image_info, symbolize
-from .dfu import find_update_image, parse_image_list
+from .dfu import find_update_image, parse_image_list, smp_error
 from .dfu import slot as dfu_slot
 from .dfu import verdict as dfu_verdict
 from .dictlog import Tools as DictlogTools
@@ -67,6 +67,7 @@ _R = TypeVar("_R")
 
 MAX_WAIT_S = 45.0
 ECHO_WAIT_S = 2.0  # how long shell_exec waits for the shell to echo the command
+DFU_RETRY_S = 3.0  # between `image list` attempts after the DFU reset
 ALIVE_TRIES = 3  # health checks after a lease ends before the board is flagged for recovery
 ALIVE_RETRY_S = 2.0
 FLASH_DRAIN_S = 60.0
@@ -803,7 +804,7 @@ class Arbiter:
         build_dir: str,
         confirm: bool = True,
         wait_s: float = MAX_WAIT_S,
-        confirm_boot_s: float = 20.0,
+        confirm_boot_s: float = 90.0,
     ) -> dict[str, Any]:
         """Update the board the way it is updated in the field: upload the signed image over
         MCUmgr, test it, reset, wait for the boot banner, then confirm it (or not)."""
@@ -821,10 +822,16 @@ class Arbiter:
             log_path = Path(op.log_path)
             res: dict[str, Any] = {"image_file": str(image), "steps": []}
 
-            async def smp(*args: str, timeout_s: float = 60) -> ProcResult:
-                r = await rt.driver.smp(list(args), log_path=log_path, timeout_s=timeout_s)
-                res["steps"].append({"cmd": " ".join(args[:2]), "ok": r.ok})
-                if not r.ok:
+            async def smp(*args: str, timeout_s: float = 60, tries: int = 1) -> ProcResult:
+                for attempt in range(tries):
+                    if attempt:
+                        await asyncio.sleep(DFU_RETRY_S)
+                    r = await rt.driver.smp(list(args), log_path=log_path, timeout_s=timeout_s)
+                    if r.ok and not smp_error(r.tail):
+                        break
+                ok = r.ok and not smp_error(r.tail)
+                res["steps"].append({"cmd": " ".join(args[:2]), "ok": ok})
+                if not ok:
                     raise _DfuStepError(" ".join(args[:2]), r)
                 return r
 
@@ -846,10 +853,13 @@ class Arbiter:
                 if boot["booted"]:
                     self.marks.setdefault(lease.token, {})[boot["channel"]] = boot["match_start"]
                     await asyncio.sleep(0.5)  # let the app bring up its SMP transport
-                slots = parse_image_list("\n".join((await smp("image", "list")).tail))
+                # MCUboot's swap can outlast the boot wait, and the app needs a moment
+                # before SMP answers (seen on the nRF9161 DK): ask again before giving up.
+                slots = parse_image_list("\n".join((await smp("image", "list", tries=5)).tail))
                 state = dfu_verdict(slots, new["hash"])
                 if state["running_new_image"] and confirm and not state["confirmed"]:
-                    await smp("image", "confirm")
+                    # By hash: a bare `image confirm` gets "Error: 3" from Zephyr 4.x.
+                    await smp("image", "confirm", new["hash"])
                     slots = parse_image_list("\n".join((await smp("image", "list")).tail))
                     state = dfu_verdict(slots, new["hash"])
             except _DfuStepError as e:

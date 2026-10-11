@@ -71,3 +71,9 @@ def verdict(slots: list[dict[str, Any]], new_hash: str | None) -> dict[str, Any]
         "confirmed": bool(running_new and active and "confirmed" in active["flags"]),
         "active_version": (active or {}).get("version"),
     }
+
+
+def smp_error(lines: list[str]) -> str | None:
+    """The "Error: N" line mcumgr prints when the device refuses a command. mcumgr still
+    exits 0 then (seen with `image confirm` on the nRF9161 DK)."""
+    return next((ln.strip() for ln in lines if re.match(r"\s*Error: ", ln)), None)
