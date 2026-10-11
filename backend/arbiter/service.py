@@ -45,7 +45,15 @@ from .history import History, compare, named_tests
 from .imageinfo import describe_build, file_hash, fingerprint, git_state
 from .logfilter import LogFilter
 from .logfilter import apply as log_filter
-from .nrf91 import FINAL_RX, STATUS_COMMANDS, check_at, convert_trace, response, summarize
+from .nrf91 import (
+    FINAL_RX,
+    STATUS_COMMANDS,
+    WILDCARD_HINT,
+    check_at,
+    convert_trace,
+    response,
+    summarize,
+)
 from .plugins import make_driver, make_power_device
 from .power import PowerDevice
 from .procs import IS_WINDOWS, ProcResult, kill_tree, run_proc
@@ -58,6 +66,9 @@ log = logging.getLogger("arbiter")
 _R = TypeVar("_R")
 
 MAX_WAIT_S = 45.0
+ECHO_WAIT_S = 2.0  # how long shell_exec waits for the shell to echo the command
+ALIVE_TRIES = 3  # health checks after a lease ends before the board is flagged for recovery
+ALIVE_RETRY_S = 2.0
 FLASH_DRAIN_S = 60.0
 # The application's boot banner. MCUboot prints "*** Booting MCUboot", which doesn't count:
 # it shows the bootloader ran, not the image just flashed.
@@ -372,10 +383,19 @@ class Arbiter:
             with contextlib.suppress(Exception):
                 async with rt.probe_lock:
                     await rt.driver.reset(halt=False, log_path=self._board_log(rt, "reset"))
-        try:
-            alive = await rt.driver.check_alive()
-        except Exception:
-            alive = False
+        alive = False
+        for attempt in range(ALIVE_TRIES):
+            # Right after the reset the probe can be busy (RTT reattaching through pylink
+            # on a Nordic DK made nrfutil device-info fail), so one miss is not enough to
+            # ask the human for a chip erase.
+            if attempt:
+                await asyncio.sleep(ALIVE_RETRY_S)
+            try:
+                alive = await rt.driver.check_alive()
+            except Exception:
+                alive = False
+            if alive:
+                break
         if not alive and rt.supported and await rt.driver.present():
             self.sched.mark_needs_recover(
                 rt.cfg.id, "probe could not read the device after the lease ended"
@@ -1429,17 +1449,35 @@ class Arbiter:
         t0 = time.monotonic()
         await self.write(session_id, token, cmd, True, channel)
         # The echo line comes first; the command is done when a prompt starts a later line.
+        # Output queued before the command ran (RTT's buffer after a debugger session, on
+        # the nRF9161 DK) ends in a prompt too, so look for the prompt after the echo. The
+        # lookbehind skips arbiter's own "[agent] > cmd" note on the channel.
+        echo = await self._wait_task(
+            rt,
+            rt.hub.expect(
+                r"(?<!\] > )" + re.escape(cmd) + r"[^\n]*\n",
+                min(timeout_s, ECHO_WAIT_S),
+                {name: start},
+                [name],
+            ),
+            lease,
+        )
+        if echo["matched"]:
+            start = echo["cursor"] - 1  # from the echo's newline, which the prompt regex needs
         res = await self._wait_task(
             rt,
             rt.hub.expect(
-                r"\n(?:\x1b\[[0-9;?]*[A-Za-z])*(?:" + prompt + ")", timeout_s, {name: start}, [name]
+                r"\n(?:\x1b\[[0-9;?]*[A-Za-z])*(?:" + prompt + ")",
+                max(0.5, timeout_s - (time.monotonic() - t0)),
+                {name: start},
+                [name],
             ),
             lease,
         )
         end = res.get("match_start", rt.hub.end(name)) if res["matched"] else rt.hub.end(name)
         raw = rt.hub.channels[name].since(start)[: end - start] if name in rt.hub.channels else b""
         lines = _shell_lines(raw.decode(errors="replace"))
-        if lines and lines[0].rstrip().endswith(cmd):
+        if not echo["matched"] and lines and lines[0].rstrip().endswith(cmd):
             lines = lines[1:]  # the echo
         out: dict[str, Any] = {
             "prompt_seen": res["matched"],
@@ -1680,6 +1718,8 @@ class Arbiter:
             for key in ("crash", "hint", "error"):
                 if res.get(key) and not out["final"]:
                     out[key] = res[key]
+            if not out["final"] and re.search(r"[?*]", cmd):
+                out["hint"] = WILDCARD_HINT
         else:
             name = rt.hub.primary
             start = rt.hub.end(name)

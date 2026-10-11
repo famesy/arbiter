@@ -73,7 +73,8 @@ async def test_resume_reports_who_got_the_board(arb):
     assert arb.sched.leases[arb.sched.boards["sim-1"].lease_token or ""].session_id == s
 
 
-async def test_child_python_prints_utf8():
+async def test_child_python_prints_utf8(monkeypatch):
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)  # a developer's own setting wins
     res = await run_proc(
         [sys.executable, "-c", "import os; print(os.environ.get('PYTHONIOENCODING'))"]
     )
@@ -109,3 +110,27 @@ def test_run_with_board_keeps_a_lease_you_already_hold(monkeypatch, capsys):
     )
     assert cli.cmd_run(args) == 0
     assert made[0].posts == ["/api/run"]
+
+
+async def test_a_busy_probe_right_after_the_lease_is_not_a_dead_board(arb, monkeypatch):
+    """On the nRF9161 DK the post-lease device-info failed once while RTT reattached; the
+    board must not be flagged for a chip erase on one miss."""
+    import arbiter.service as service
+
+    monkeypatch.setattr(service, "ALIVE_RETRY_S", 0)
+    rt = arb.rt("sim-1")
+    answers = [False, True]
+
+    async def check_alive() -> bool:
+        return answers.pop(0)
+
+    monkeypatch.setattr(rt.driver, "check_alive", check_alive)
+    await arb._reset_and_check(rt)
+    assert arb.sched.boards["sim-1"].state != "NEEDS_RECOVER" and not answers
+
+    async def dead() -> bool:
+        return False
+
+    monkeypatch.setattr(rt.driver, "check_alive", dead)
+    await arb._reset_and_check(rt)
+    assert arb.sched.boards["sim-1"].state == "NEEDS_RECOVER"

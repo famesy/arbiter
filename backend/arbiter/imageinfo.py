@@ -133,6 +133,54 @@ def parse_partitions(path: Path) -> list[dict[str, Any]]:
     return keep
 
 
+_DTS_NODE = re.compile(r"^\s*((?:[\w-]+:\s*)*)([\w,.+-]+)(?:@([0-9a-fA-F]+))?\s*\{")
+_DTS_REG = re.compile(r"^\s*reg\s*=\s*<\s*(0x[0-9a-fA-F]+|\d+)\s+(0x[0-9a-fA-F]+|\d+)")
+_DTS_LABEL = re.compile(r'^\s*label\s*=\s*"([^"]*)"')
+_DTS_CODE = re.compile(r"zephyr,code-partition\s*=\s*&([\w-]+)")
+
+
+def parse_dts_partitions(path: Path) -> tuple[list[dict[str, Any]], str | None]:
+    """Flash partitions from a build's zephyr.dts (`partition@...` nodes; nested ones are
+    offset by their parent's address), and the label of the zephyr,code-partition. NCS
+    v3.x builds without Partition Manager keep their layout here instead of partitions.yml."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return [], None
+    code = m.group(1) if (m := _DTS_CODE.search(text)) else None
+    out: list[dict[str, Any]] = []
+    stack: list[dict[str, Any] | None] = []  # one entry per open node; None if not a partition
+    for raw in text.splitlines():
+        line = re.sub(r"/\*.*?\*/", "", raw).rstrip()
+        if line.endswith("{"):
+            node: dict[str, Any] | None = None
+            m = _DTS_NODE.match(line)
+            if m and m.group(2) == "partition":
+                labels = [x.strip() for x in m.group(1).split(":") if x.strip()]
+                parent = next((n for n in reversed(stack) if n is not None), None)
+                node = {"name": labels[-1] if labels else f"partition@{m.group(3)}",
+                        "_base": parent["_abs"] if parent and "_abs" in parent else 0}  # fmt: skip
+                out.append(node)
+            stack.append(node)
+        elif line.strip() == "};":
+            if stack:
+                stack.pop()
+        elif stack and (cur := stack[-1]) is not None:
+            if (r := _DTS_REG.match(line)) and "_abs" not in cur:
+                cur["_abs"] = cur["_base"] + int(r.group(1), 0)
+                cur["size"] = int(r.group(2), 0)
+            elif lb := _DTS_LABEL.match(line):
+                cur["label"] = lb.group(1)
+    keep = [p for p in out if "_abs" in p]
+    for p in keep:
+        p["address"] = p.pop("_abs")
+        p.pop("_base", None)
+    keep.sort(key=lambda p: (p["address"], -p["size"]))
+    for p in keep:
+        p["address"] = hex(p["address"])
+    return [{k: p[k] for k in ("name", "label", "address", "size") if k in p} for p in keep], code
+
+
 def fingerprint(build_dir: Path) -> dict[str, Any]:
     """Identity of a build: hashes of the default image's ELF and Kconfig, and git state."""
     build_dir = Path(build_dir).resolve()
@@ -178,6 +226,10 @@ def describe_build(build_dir: Path, top: int = 8) -> dict[str, Any]:
         "kconfig": {k: cfg[k] for k in KEY_OPTIONS if k in cfg},
     }
     parts = parse_partitions(build_dir / "partitions.yml")
+    code = None
+    if not parts:
+        parts, code_label = parse_dts_partitions(d / "zephyr" / "zephyr.dts")
+        code = next((p for p in parts if p["name"] == code_label), None)
     if parts:
         out["partitions"] = parts
     try:
@@ -192,6 +244,13 @@ def describe_build(build_dir: Path, top: int = 8) -> dict[str, Any]:
             out["memory"][("flash" if "FLASH" in key else "ram") + "_used_pct"] = (
                 round(100 * used / (kib * 1024), 1) if kib else None
             )
+    if code and code.get("size") and out["memory"].get("flash_bytes") is not None:
+        # The image must fit its code partition (e.g. the non-secure slot), not all flash.
+        out["memory"]["code_partition"] = code["name"]
+        out["memory"]["code_partition_kib"] = code["size"] // 1024
+        out["memory"]["flash_used_pct"] = round(
+            100 * out["memory"]["flash_bytes"] / code["size"], 1
+        )
     out.update({k: v for k, v in fingerprint(build_dir).items() if k != "build_dir"})
     out["warnings"] = warnings(cfg, out)
     return out

@@ -461,6 +461,10 @@ class DebugSession:
             if self.gdb.running:
                 await self.gdb.interrupt()
             if resume:
+                # J-Link's GDB server leaves the core halted on detach (seen on the nRF9161
+                # DK), so ask it to run first. OpenOCD rejects "go" and resumes on detach.
+                with contextlib.suppress(Exception):
+                    await self.gdb.cli("monitor go", 5)
                 await self.gdb.mi("-target-detach", 5)  # lets the target run on
         await self.gdb.close()
         await _kill(self.server)

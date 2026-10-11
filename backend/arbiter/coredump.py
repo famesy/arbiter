@@ -19,13 +19,12 @@ import contextlib
 import re
 import socket
 import subprocess
-import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from .workspace import cache_value, zephyr_base_from_build
+from .workspace import build_python, cache_value, zephyr_base_from_build
 
 GDB_COMMANDS = [
     "set pagination off",
@@ -104,10 +103,7 @@ def find_tools(image_dir: Path, build_dir: Path) -> Tools | str:
     parser, server = scripts / "coredump_serial_log_parser.py", scripts / "coredump_gdbserver.py"
     if not (parser.exists() and server.exists()):
         return f"Zephyr's coredump scripts are not in {scripts}"
-    py = cache_value(cache, "Python3_EXECUTABLE") or cache_value(
-        build_dir / "CMakeCache.txt", "Python3_EXECUTABLE"
-    )
-    python = [py] if py and Path(py).exists() else [sys.executable]
+    python = build_python(image_dir, build_dir)
     gdb = cache_value(cache, "CMAKE_GDB")
     if not gdb or not Path(gdb).exists():
         return "the build's CMakeCache names no gdb (CMAKE_GDB); is the Zephyr SDK installed?"

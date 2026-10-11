@@ -104,3 +104,15 @@ def test_convert_trace_without_nrfutil(tmp_path, monkeypatch):
     raw = tmp_path / "t.bin"
     raw.write_bytes(b"\x00")
     assert convert_trace(raw)["converted"] is False
+
+
+def test_summary_names_value_zero():
+    """+CFUN: 0 (seen on the nRF9161 DK before the app connects) is "power off", not "other"."""
+    res = summarize(
+        {
+            "AT+CFUN?": {"ok": True, "final": "OK", "lines": ["+CFUN: 0"]},
+            "AT+CEREG?": {"ok": True, "final": "OK", "lines": ["+CEREG: 0,0"]},
+        }
+    )
+    assert res["functional_mode"]["meaning"] == "power off (modem off)"
+    assert res["registration"]["meaning"] == "not registered, not searching"

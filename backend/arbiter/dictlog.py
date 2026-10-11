@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .workspace import cache_value, zephyr_base_from_build
+from .workspace import build_python, zephyr_base_from_build
 
 HEX_MARK = b"##ZLOGV1##"
 HEX_LINE = re.compile(rb"^[0-9a-fA-F]+$")
@@ -34,8 +33,8 @@ def find_tools(image_dir: Path, build_dir: Path) -> Tools | str:
     db = image_dir / "zephyr" / "log_dictionary.json"
     if not db.exists():
         return (
-            f"no {db.name} in {db.parent}: build with CONFIG_LOG_DICTIONARY_SUPPORT=y and "
-            "CONFIG_LOG_BACKEND_UART_OUTPUT_DICTIONARY_HEX=y (or _BIN)"
+            f"no {db.name} in {db.parent}: build with CONFIG_LOG_BACKEND_UART_OUTPUT_DICTIONARY=y "
+            "and CONFIG_LOG_BACKEND_UART_OUTPUT_DICTIONARY_HEX=y (or _BIN)"
         )
     zephyr = zephyr_base_from_build(build_dir)
     if zephyr is None:
@@ -43,10 +42,7 @@ def find_tools(image_dir: Path, build_dir: Path) -> Tools | str:
     parser = zephyr / "scripts" / "logging" / "dictionary" / "log_parser.py"
     if not parser.exists():
         return f"Zephyr's log parser is not at {parser}"
-    py = cache_value(image_dir / "CMakeCache.txt", "Python3_EXECUTABLE") or cache_value(
-        build_dir / "CMakeCache.txt", "Python3_EXECUTABLE"
-    )
-    return Tools([py] if py and Path(py).exists() else [sys.executable], parser, db)
+    return Tools(build_python(image_dir, build_dir), parser, db)
 
 
 def prepare(data: bytes) -> tuple[bytes, list[str]]:

@@ -112,7 +112,7 @@ def test_find_tools_from_the_build(tmp_path):
     (build / "CMakeCache.txt").write_text(f"ZEPHYR_BASE:PATH={zephyr}\nCMAKE_GDB:FILEPATH={gdb}\n")
     tools = find_tools(build, build)
     assert isinstance(tools, Tools), tools
-    assert tools.gdb == [str(gdb)] and tools.python == [sys.executable]
+    assert tools.gdb == [str(gdb)] and tools.python == [sys.executable, "-E"]
     (build / "CMakeCache.txt").write_text(f"ZEPHYR_BASE:PATH={zephyr}\n")
     assert "CMAKE_GDB" in str(find_tools(build, build))
 

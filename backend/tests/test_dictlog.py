@@ -41,7 +41,7 @@ def test_prepare_spots_hex_output():
 
 
 def test_find_tools_says_what_is_missing(build_dir):
-    assert "CONFIG_LOG_DICTIONARY_SUPPORT" in str(find_tools(build_dir, build_dir))
+    assert "CONFIG_LOG_BACKEND_UART_OUTPUT_DICTIONARY=y" in str(find_tools(build_dir, build_dir))
     (build_dir / "zephyr" / "log_dictionary.json").write_text("{}")
     assert "ZEPHYR_BASE" in str(find_tools(build_dir, build_dir))
 
@@ -69,3 +69,13 @@ async def test_decode_log_reads_since_the_flash(arb, build_dir):
     res = await arb.decode_log(s, tok)
     assert res["ok"] and res["format"] == "binary", res
     assert "decoded *** Booting" in res["untrusted_device_output"]
+
+
+def test_build_python_reads_the_internal_cache_entry(tmp_path):
+    """NCS v3.4.1 records only _Python3_EXECUTABLE:INTERNAL in CMakeCache.txt."""
+    from arbiter.workspace import build_python
+
+    (tmp_path / "CMakeCache.txt").write_text(f"_Python3_EXECUTABLE:INTERNAL={sys.executable}\n")
+    assert build_python(tmp_path / "app", tmp_path) == [sys.executable]
+    (tmp_path / "CMakeCache.txt").write_text("")
+    assert build_python(tmp_path / "app", tmp_path) == [sys.executable, "-E"]

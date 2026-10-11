@@ -296,7 +296,10 @@ class Scheduler:
         now = self.clock()
         if external_id:
             for s in self.sessions.values():
-                if s.external_id == external_id and not s.ended:
+                # An ended session still in its lease's grace period is the same agent
+                # coming back (e.g. its MCP server restarted): give it the board back.
+                if s.external_id == external_id and (not s.ended or self.leases_of(s.id)):
+                    s.ended = False
                     s.last_heartbeat, s.alive = now, True
                     s.heartbeat = s.heartbeat or heartbeat
                     for k, v in info.items():

@@ -89,3 +89,38 @@ async def test_fixtures_select_boards(tmp_path):
         assert res["status"] == "granted" and res["board"] == "b"
     finally:
         await a.stop()
+
+
+async def test_shell_exec_skips_output_queued_before_the_echo(arb, build_dir, monkeypatch):
+    """After a debugger session the nRF9161 DK's RTT delivered a queued log line and a
+    prompt before the command's echo; that prompt is not the end of the command."""
+    s, tok = await lease_for(arb)
+    await done(arb, await arb.flash(s, tok, str(build_dir)))
+    await arb.expect(s, tok, r"uart:~\$ ", 5)
+    hub = arb.boards["sim-1"].hub
+    write = arb.write
+
+    async def queued_then_write(*a, **kw):
+        hub.feed(b"[00:00:22.767] <dbg> app: tick 11\r\nuart:~$ ", hub.primary)
+        return await write(*a, **kw)
+
+    monkeypatch.setattr(arb, "write", queued_then_write)
+    res = await arb.shell_exec(s, tok, "kernel uptime")
+    assert res["untrusted_device_output"].startswith("Uptime: "), res
+
+
+async def test_shell_exec_keeps_output_that_ends_like_the_command(arb, build_dir, monkeypatch):
+    """An answer line ending in the command (the emulator test's "you said ping"): the
+    echo is already skipped, so that line must not be dropped as an echo too."""
+    s, tok = await lease_for(arb)
+    await done(arb, await arb.flash(s, tok, str(build_dir)))
+    await arb.expect(s, tok, r"uart:~\$ ", 5)
+    hub = arb.boards["sim-1"].hub
+
+    async def answer(*_a, **_kw):
+        hub.feed(b"device list\r\nno device list\r\nuart:~$ ", hub.primary)
+        return {"ok": True}
+
+    monkeypatch.setattr(arb, "write", answer)
+    res = await arb.shell_exec(s, tok, "device list")
+    assert res["untrusted_device_output"] == "no device list", res

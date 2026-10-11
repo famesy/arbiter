@@ -110,12 +110,15 @@ class UartSource:
         await asyncio.to_thread(ser.write, data)
 
 
+ATTACH_WAIT_S = 5.0  # how long a write waits for RTT to (re)attach
+WRITE_WAIT_S = 2.0  # how long a write waits for room in the down buffer
+
+
 class RttSource:
     """SEGGER RTT through pylink (`pip install pylink-square`). Optional: when pylink
     or the J-Link DLL is missing, start() annotates the console and stays idle.
-    Reattaches by itself after the probe or target drops out.
-
-    Not verified on hardware yet."""
+    Reattaches by itself after the probe or target drops out. Checked on an nRF9161 DK
+    (J-Link OB, pylink-square 2.0): read, shell over RTT, reattach after gdb."""
 
     name = "rtt"
     writable = True
@@ -129,6 +132,7 @@ class RttSource:
         self._jl: Any = None
         self._task: asyncio.Task[Any] | None = None
         self.connected = False
+        self._attached = asyncio.Event()
 
     async def start(self, hub: ConsoleHub) -> None:
         try:
@@ -171,9 +175,11 @@ class RttSource:
                 continue
             backoff, failures = self.retry_s, 0
             self.connected = True
+            self._attached.set()
             hub.annotate("[arbiter] rtt attached")
             err = await self._pump(hub)
             self.connected = False
+            self._attached.clear()
             jl, self._jl = self._jl, None
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(jl.close)
@@ -216,13 +222,40 @@ class RttSource:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(close)
         self.connected = False
+        self._attached.clear()
 
     async def write(self, data: bytes) -> None:
+        if self._jl is None and self._task is not None:
+            # Still attaching, e.g. right after flash or a debugger session gave the probe
+            # back (seen on the nRF9161 DK: a shell_exec straight after inspect_hung).
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._attached.wait(), ATTACH_WAIT_S)
         if self._jl is None:
             from ..errors import ArbiterError
 
             raise ArbiterError("BOARD_OFFLINE", "RTT is not attached")
-        await asyncio.to_thread(self._jl.rtt_write, 0, list(data))
+        # rtt_write returns how much went into the down buffer: 0 while the J-Link is still
+        # locating the control block after an attach, or less when the buffer is full.
+        loop = asyncio.get_running_loop()
+        deadline, sent = loop.time() + WRITE_WAIT_S, 0
+        while sent < len(data):
+            jl = self._jl
+            if jl is None:
+                from ..errors import ArbiterError
+
+                raise ArbiterError("BOARD_OFFLINE", "RTT went away while writing")
+            n = await asyncio.to_thread(jl.rtt_write, 0, list(data[sent:]))
+            sent += n if isinstance(n, int) and n > 0 else 0
+            if sent < len(data):
+                if loop.time() > deadline:
+                    from ..errors import ArbiterError
+
+                    raise ArbiterError(
+                        "OP_FAILED",
+                        f"RTT took only {sent} of {len(data)} bytes: is the app reading "
+                        "RTT down-buffer 0 (an RTT shell or console)?",
+                    )
+                await asyncio.sleep(0.05)
 
 
 class CallbackSource:

@@ -35,6 +35,9 @@ CONTEXT_LINES = 30  # lines kept from before the crash
 MAX_LINES = 120  # lines kept from the crash block itself
 QUIET_S = 0.75  # a block with no end marker ends after this long without output
 AFTER_END_S = 0.25  # after "Halting system", how long coredump lines may still follow
+# Between #CD:BEGIN# and #CD:END#: deferred logging sends a dump in bursts, with pauses
+# well over QUIET_S on a 115200 baud UART (seen on the nRF9161 DK).
+COREDUMP_QUIET_S = 3.0
 REPEAT_WINDOW_S = 120.0  # the same crash again within this window counts as a repeat
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -299,7 +302,7 @@ class CrashWatcher:
         if tail:
             self._partial[channel] = (pos, tail)
         if channel in self._open:
-            self._arm(channel, AFTER_END_S if self._open[channel].ended_by else None)
+            self._arm(channel, self._wait(self._open[channel]))
 
     def _line(self, channel: str, raw: str, cursor: int) -> None:
         line = clean(raw)
@@ -319,7 +322,7 @@ class CrashWatcher:
                 if m := _END.search(line):
                     # Coredump lines may still follow "Halting system": wait a moment for them.
                     crash.ended_by = "halted" if "alt" in m.group(0) else "reset"
-                    self._arm(channel, AFTER_END_S)
+                    self._arm(channel, self._wait(crash))
                 elif len(crash.lines) >= MAX_LINES and not crash.coredump:
                     self._close(channel, "truncated")
                 return
@@ -339,6 +342,12 @@ class CrashWatcher:
             return
         if line.strip():
             recent.append(raw.rstrip("\r"))
+
+    def _wait(self, crash: Crash) -> float | None:
+        """How long the block may stay silent before it is closed."""
+        if crash.coredump and "#CD:END#" not in crash.coredump[-1]:
+            return max(COREDUMP_QUIET_S, self.quiet_s)
+        return AFTER_END_S if crash.ended_by else None
 
     def _arm(self, channel: str, delay: float | None = None) -> None:
         t = self._timers.pop(channel, None)

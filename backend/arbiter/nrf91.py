@@ -19,6 +19,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+# The Zephyr shell expands ? and * as wildcards (CONFIG_SHELL_WILDCARD, on by default), so
+# `at AT+CFUN?` never reaches the modem: the AT shell prints its usage instead.
+WILDCARD_HINT = (
+    "The shell treats ? and * as wildcards, so the AT shell could not send this command. "
+    "Rebuild the app with CONFIG_SHELL_WILDCARD=n."
+)
 FINAL_RX = r"(?m)^(OK|ERROR|\+CME ERROR: ?\d+|\+CMS ERROR: ?\d+)\s*$"
 # Commands that would wipe the modem's settings or credentials: the human decides.
 REFUSED = re.compile(r"^AT%XFACTORYRESET|^AT%CMNG=3|^AT%XMODEMUUID=", re.IGNORECASE)
@@ -107,6 +113,10 @@ def _int(s: str | None) -> int | None:
     return None
 
 
+def _key(value: int | None) -> int:
+    return -1 if value is None else value
+
+
 def summarize(replies: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Turn the STATUS_COMMANDS replies into a short LTE status, with hints."""
     out: dict[str, Any] = {}
@@ -121,12 +131,12 @@ def summarize(replies: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
     if f := first("AT+CFUN?", "+CFUN:"):
         mode = _int(f[0])
-        out["functional_mode"] = {"value": mode, "meaning": CFUN.get(mode or -1, "other")}
+        out["functional_mode"] = {"value": mode, "meaning": CFUN.get(_key(mode), "other")}
         if mode in (0, 4, 20):
             hints.append("The radio is off: the app hasn't connected (lte_lc_connect / AT+CFUN=1).")
     if f := first("AT+CEREG?", "+CEREG:"):
         stat = _int(f[1]) if len(f) > 1 else None
-        out["registration"] = {"value": stat, "meaning": CEREG.get(stat or -1, "other")}
+        out["registration"] = {"value": stat, "meaning": CEREG.get(_key(stat), "other")}
         if stat == 2:
             hints.append(
                 "Searching: check the antenna, SIM, coverage and that the system mode (LTE-M / "
