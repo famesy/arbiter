@@ -1477,7 +1477,7 @@ class Arbiter:
         end = res.get("match_start", rt.hub.end(name)) if res["matched"] else rt.hub.end(name)
         raw = rt.hub.channels[name].since(start)[: end - start] if name in rt.hub.channels else b""
         lines = _shell_lines(raw.decode(errors="replace"))
-        if lines and lines[0].rstrip().endswith(cmd):
+        if not echo["matched"] and lines and lines[0].rstrip().endswith(cmd):
             lines = lines[1:]  # the echo
         out: dict[str, Any] = {
             "prompt_seen": res["matched"],
