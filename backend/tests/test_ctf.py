@@ -24,6 +24,20 @@ def test_summarize_counts_events_and_switches():
     assert s["isr_per_s"] == 1.0
 
 
+def test_summarize_counts_events_without_fields():
+    """babeltrace2 2.0.5 on a trace from the nRF9161 DK prints ISR events bare."""
+    text = (
+        "[07:00:00.916443581] (+0.000000000) timer_expiry_exit: { id = 537002232 }\n"
+        "[07:00:00.916474099] (+0.000030518) isr_exit: \n"
+        '[07:00:00.916474099] (+0.000000000) thread_switched_out: { thread_id = 1, name = "idle" }\n'
+        "[07:00:01.916474099] (+1.000000000) isr_enter: \n"
+    )
+    s = ctf.summarize(text)
+    assert s["events"] == 4
+    assert s["by_event"]["isr_exit"] == 1 and s["by_event"]["isr_enter"] == 1
+    assert s["isr_per_s"] == 1.0
+
+
 def fake_zephyr(build: Path) -> None:
     zephyr = build.parent / "zephyr-base"
     meta = zephyr / "subsys" / "tracing" / "ctf" / "tsdl" / "metadata"

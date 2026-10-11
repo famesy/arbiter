@@ -18,7 +18,8 @@ from typing import Any
 
 from .workspace import zephyr_base_from_build
 
-EVENT_RX = re.compile(r"^\[([\d:.]+)\]\s+\([^)]*\)\s+(?:\S+\s+)?([\w.]+):\s*\{(.*)\}\s*$")
+# babeltrace2 prints an event without fields as "isr_enter: " (no braces).
+EVENT_RX = re.compile(r"^\[([\d:.]+)\]\s+\([^)]*\)\s+(?:\S+\s+)?([\w.]+):\s*(?:\{(.*)\})?\s*$")
 NAME_RX = re.compile(r'\bname = "([^"]*)"')
 MAX_LINES = 200_000
 
@@ -83,7 +84,7 @@ def summarize(text: str, top: int = 10) -> dict[str, Any]:
         first = first if first is not None else ts
         last = ts
         if name == "thread_switched_in":
-            n = NAME_RX.search(fields)
+            n = NAME_RX.search(fields or "")
             switched_in[n.group(1) if n else "?"] += 1
     out: dict[str, Any] = {"events": sum(events.values())}
     if first and last:
