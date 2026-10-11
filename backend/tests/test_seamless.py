@@ -221,6 +221,37 @@ async def test_rtt_reattaches_after_the_probe_drops_out(monkeypatch):
     assert not src.connected
 
 
+async def test_rtt_write_waits_for_a_reattach_in_progress(monkeypatch):
+    """Right after inspect_hung gives the probe back, RTT is still reattaching; a
+    shell_exec then must wait for it instead of failing with BOARD_OFFLINE."""
+    monkeypatch.setitem(sys.modules, "pylink", types.ModuleType("pylink"))
+    written: list[list[int]] = []
+    jl = FakeJLink([])
+    takes = [0, 5, 100]  # nothing just after attach, then part of it, then the rest
+
+    def rtt_write(_buf: int, data: list[int]) -> int:
+        n = min(takes.pop(0), len(data))
+        written.append(data[:n])
+        return n
+
+    jl.rtt_write = rtt_write  # type: ignore[attr-defined]
+    attempts: list[Any] = [OSError("probe busy"), OSError("probe busy"), jl]
+
+    def fake_open() -> Any:
+        a = attempts.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    src = RttSource("1050978819", "nRF9161_xxCA")
+    src.retry_s = 0.05
+    monkeypatch.setattr(src, "_open", fake_open)
+    await src.start(FakeHub())  # type: ignore[arg-type]
+    await src.write(b"kernel uptime\n")  # not attached yet
+    assert [b for chunk in written for b in chunk] == list(b"kernel uptime\n")
+    await src.stop()
+
+
 def test_nrf_driver_forgets_vcom_ports_after_re_enumeration(tmp_path, monkeypatch):
     cfg = BoardConfig(id="dk", driver="nrf", probe_serial="1050978819", ports=[PortConfig(vcom=0)])
     drv = NrfDriver(cfg, ConsoleHub("dk"), tmp_path)

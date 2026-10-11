@@ -6,9 +6,10 @@
 * `Stm32Driver` (driver = "stm32"): ST-Link boards; reset and mass erase through
   STM32_Programmer_CLI.
 
-Not yet verified on hardware: exact nrfutil sub-command output, the nRF9161 DK's
-VCOM numbering, and RTT through pylink. Everything takes the probe serial so
-two probes never trigger an interactive "select emulator" prompt.
+Checked on an nRF9161 DK (Windows, NCS v3.4.1): nrfutil's device list, reset and
+device-info, the VCOM numbering (VCOM0 app, VCOM1 TF-M), and RTT through pylink.
+Everything takes the probe serial so two probes never trigger an interactive
+"select emulator" prompt.
 """
 
 from __future__ import annotations
