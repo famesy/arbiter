@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from arbiter.dfu import find_update_image, parse_image_list, verdict
+from arbiter.dfu import find_update_image, parse_image_list, smp_error, verdict
 from arbiter.errors import ArbiterError
 
 from .test_service import done, lease_for
@@ -87,3 +87,34 @@ async def test_dfu_needs_a_signed_image(arb, build_dir):
     with pytest.raises(ArbiterError) as e:
         await arb.dfu(s, tok, str(build_dir))
     assert "MCUboot" in (e.value.hint or "")
+
+
+async def test_dfu_asks_again_while_mcuboot_is_still_swapping(arb, build_dir, monkeypatch):
+    """On the nRF9161 DK the first `image list` after the reset timed out (NMP timeout)
+    while MCUboot was still swapping, and the DFU was reported as failed."""
+    import arbiter.service as service
+
+    monkeypatch.setattr(service, "DFU_RETRY_S", 0)
+    signed(build_dir)
+    drv = arb.boards["sim-1"].driver
+    real = drv.smp
+    calls: list[list[str]] = []
+
+    async def smp(args, **kw):
+        calls.append(args)
+        if args[:2] == ["image", "list"] and calls.count(["image", "list"]) == 2:
+            from arbiter.procs import ProcResult
+
+            return ProcResult(["mcumgr", *args], 1, 0.0, tail=["Error: NMP timeout"])
+        return await real(args, **kw)
+
+    monkeypatch.setattr(drv, "smp", smp)
+    s, tok = await lease_for(arb)
+    res = await done(arb, await arb.dfu(s, tok, str(build_dir)))
+    assert res["ok"] is True, res
+    assert res["running_new_image"] and res["confirmed"]
+
+
+def test_smp_error_finds_a_refusal_despite_exit_code_0():
+    assert smp_error(["Error: 3"]) == "Error: 3"
+    assert smp_error(["Images:", " image=0 slot=0"]) is None

@@ -303,7 +303,9 @@ class SimDriver(BoardDriver):
                 out.append("Split status: N/A (0)")
             case ["image", "test", h] if s1 is not None and s1["hash"] == h:
                 s1["flags"] = ["pending"]
-            case ["image", "confirm", *h] if s0 is not None and h in ([], [s0["hash"]]):
+            case ["image", "confirm"]:
+                out = ["Error: 3"]  # what Zephyr 4.x's SMP server answers, with exit code 0
+            case ["image", "confirm", h] if s0 is not None and h == s0["hash"]:
                 s0["flags"] = ["active", "confirmed"]
                 if s1 is not None:
                     s1["flags"] = []
