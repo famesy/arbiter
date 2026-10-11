@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import importlib
 import os
 import shutil
 import sys
@@ -41,12 +42,18 @@ def jlink_gdbserver(configured: str | None = None) -> str | None:
     None when PATH already has it (the runner's default works) or nothing is found."""
     if configured:
         return configured
-    if shutil.which("JLinkGDBServer") or sys.platform != "win32":
+    if shutil.which("JLinkGDBServer"):
+        return None
+    return _windows_jlink_gdbserver()
+
+
+def _windows_jlink_gdbserver() -> str | None:
+    platform: str = sys.platform  # through a variable, so mypy still checks the rest off Windows
+    if platform != "win32":
         return None
     dirs: list[str] = []
     try:
-        import winreg
-
+        winreg: Any = importlib.import_module("winreg")  # Any: typeshed hides it off Windows
         for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             try:
                 with winreg.OpenKey(hive, r"Software\SEGGER\J-Link") as key:

@@ -186,10 +186,10 @@ def test_jlink_gdbserver_lookup(monkeypatch, tmp_path):
     from arbiter.drivers import west
 
     assert west.jlink_gdbserver("C:/J/JLinkGDBServerCL.exe") == "C:/J/JLinkGDBServerCL.exe"
-    monkeypatch.setattr(west.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(west.sys, "platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    monkeypatch.setattr("sys.platform", "linux")
     assert west.jlink_gdbserver() is None  # PATH is the runner's business off Windows
-    monkeypatch.setattr(west.sys, "platform", "win32")
+    monkeypatch.setattr("sys.platform", "win32")
     exe = tmp_path / "SEGGER" / "JLink_V982" / "JLinkGDBServerCL.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("")

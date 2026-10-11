@@ -39,11 +39,11 @@ MAX_CHILDREN = 1024
 class ShellCommand:
     name: str
     help: str | None = None
-    usage: str | None = None  # from structured help (SHELL_HELP), when the image has it
     mandatory: int = 0  # argument counts include the command itself, as in Zephyr
     optional: int = 0
     dynamic: bool = False  # subcommands are generated at run time and not listed
     subcommands: list[ShellCommand] = field(default_factory=list)
+    usage: str | None = None  # from structured help (SHELL_HELP), when the image has it
 
 
 @dataclass
