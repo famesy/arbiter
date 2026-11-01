@@ -1,9 +1,9 @@
 # Dev and CI tools. Keep ruff in step with .pre-commit-config.yaml.
-ruff==0.16.10
-mypy==2.4.0
-pytest==9.1.1
-pytest-asyncio==1.4.0
-pre-commit==4.6.2
+ruff==0.17.3
+mypy==2.4.1
+pytest==9.2.0
+pytest-asyncio==1.4.1
+pre-commit==4.7.0
 types-psutil==7.2.2.20260906
 # `arbiter tui` (the tui extra), so mypy and the tests see it
 textual==8.2.8
